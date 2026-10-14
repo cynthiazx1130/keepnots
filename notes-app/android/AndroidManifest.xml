@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.znotes.app"
+    android:versionCode="28"
+    android:versionName="1.7.8">
+
+  <!-- 基线 = Google Play 要求（minSdk 24 / targetSdk 36，2026-08 起新应用强制 target 36）。
+       自用 APK 由 dev/build-apk.mjs 在暂存副本里回写为 minSdk 19 / targetSdk 28（兼容安卓 4.4）。 -->
+  <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="36"/>
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+  <!-- WRITE_EXTERNAL_STORAGE 不设 maxSdkVersion：自用 APK（target 28）在 Android 10+ 仍走 legacy 存储需要它；
+       Play AAB 由 dev/build-aab.mjs 在暂存副本里单独加 maxSdkVersion=28（target 36 下该权限本就无效）。 -->
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+
+  <application
+      android:name=".ZApp"
+      android:label="守心便签"
+      android:icon="@mipmap/ic_launcher"
+      android:usesCleartextTraffic="true"
+      android:hardwareAccelerated="true"
+      android:theme="@android:style/Theme.Holo.Light.NoActionBar">
+    <activity
+        android:name=".MainActivity"
+        android:exported="true"
+        android:configChanges="orientation|keyboardHidden|screenSize|keyboard"
+        android:windowSoftInputMode="adjustResize">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+
+    <provider
+        android:name=".ShareProvider"
+        android:authorities="com.znotes.app.share"
+        android:exported="false"
+        android:grantUriPermissions="true"/>
+  </application>
+</manifest>

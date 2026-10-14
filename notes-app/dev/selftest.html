@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>云便签自测</title>
+<style>
+  body { font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; padding: 24px; max-width: 900px; margin: 0 auto; background: #fafafa; color: #222; }
+  h1 { font-size: 20px; }
+  .case { padding: 8px 12px; border-radius: 8px; margin: 6px 0; background: #fff; border: 1px solid #e5e5e5; }
+  .case.ok { border-color: #b7dfb9; background: #f3fbf3; }
+  .case.fail { border-color: #f2b8b5; background: #fdf4f3; }
+  .case .err { color: #b3261e; font-size: 12.5px; white-space: pre-wrap; }
+  #summary { font-weight: 700; margin: 14px 0; font-size: 16px; }
+</style>
+</head>
+<body>
+<h1>云便签自测（core.js）</h1>
+<div id="summary">运行中…</div>
+<div id="out"></div>
+
+<script src="../core.js"></script>
+<script>
+'use strict';
+const out = document.getElementById('out');
+const results = [];
+function log(name, ok, err) {
+  results.push({ name, ok, err });
+  const d = document.createElement('div');
+  d.className = 'case ' + (ok ? 'ok' : 'fail');
+  d.innerHTML = '<b>' + (ok ? '✓' : '✕') + '</b> ';
+  d.appendChild(document.createTextNode(name));
+  if (err) { const e = document.createElement('div'); e.className = 'err'; e.textContent = String(err && err.stack || err); d.appendChild(e); }
+  out.appendChild(d);
+  document.getElementById('summary').textContent = results.filter(r => r.ok).length + ' / ' + results.length + ' 通过';
+}
+async function t(name, fn) { try { await fn(); log(name, true); } catch (e) { log(name, false, e); } }
+const assert = (cond, msg) => { if (!cond) throw new Error(msg || 'assert failed'); };
+const assertEq = (a, b, msg) => { if (a !== b) throw new Error((msg || 'assertEq') + '：' + JSON.stringify(a) + ' !== ' + JSON.stringify(b)); };
+
+/* ---------- 虚拟 WebDAV 服务器（fetch 垫片） ---------- */
+function installDavShim() {
+  const fs = { dirs: new Set(['/dav']), files: new Map() }; // files: path -> {body, etag}
+  const norm = p => ('' + p).replace(/\/+$/, '') || '/';
+  const parentOf = p => norm(p).split('/').slice(0, -1).join('/') || '/';
+  let etagSeed = 0;
+  function xmlEntries(path, depth) {
+    const entries = [];
+    const push = (href, isDir, etag, mtime) => entries.push(
+      '<D:response><D:href>' + href + '</D:href><D:propstat><D:prop>' +
+      '<D:resourcetype>' + (isDir ? '<D:collection/>' : '') + '</D:resourcetype>' +
+      '<D:getetag>' + etag + '</D:getetag>' +
+      '<D:getlastmodified>' + new Date(mtime).toUTCString() + '</D:getlastmodified>' +
+      '</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>');
+    const p = norm(path);
+    if (!fs.dirs.has(p) && !fs.files.has(p)) return null;
+    const mtime = fs.files.has(p) ? 1e12 : 1e12;
+    push(p, fs.dirs.has(p), fs.files.has(p) ? fs.files.get(p).etag : '"dir"', mtime);
+    if (depth >= 1 && fs.dirs.has(p)) {
+      for (const d of fs.dirs) if (d !== p && parentOf(d) === p) push(d, true, '"dir"', mtime);
+      for (const [fp, f] of fs.files) if (parentOf(fp) === p) push(fp, false, f.etag, 1e12 + 5);
+    }
+    return entries;
+  }
+  window.fetch = async function (url, opts = {}) {
+    const u = new URL(url, location.href);
+    const path = norm(decodeURIComponent(u.pathname));
+    const method = (opts.method || 'GET').toUpperCase();
+    const hdr = opts.headers || {};
+    if (!/^Basic /.test(hdr['Authorization'] || '')) return new Response('no auth', { status: 401 });
+    await new Promise(r => setTimeout(r, 5));
+    if (method === 'OPTIONS') return new Response('', { status: 200 });
+    if (method === 'PROPFIND') {
+      const depth = parseInt(hdr['Depth'] || '1', 10);
+      const entries = xmlEntries(path, depth);
+      if (entries === null) return new Response('nf', { status: 404 });
+      return new Response('<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">' + entries.join('') + '</D:multistatus>', { status: 207 });
+    }
+    if (method === 'MKCOL') {
+      if (fs.dirs.has(path) || fs.files.has(path)) return new Response('exists', { status: 405 });
+      if (!fs.dirs.has(parentOf(path))) return new Response('no parent', { status: 409 });
+      fs.dirs.add(path); return new Response('', { status: 201 });
+    }
+    if (method === 'PUT') {
+      if (!fs.dirs.has(parentOf(path))) return new Response('no parent', { status: 409 });
+      const body = typeof opts.body === 'string' ? opts.body : '(binary)';
+      const etag = '"e' + (++etagSeed) + '"';
+      fs.files.set(path, { body, etag });
+      return new Response('', { status: 201, headers: { 'ETag': etag } });
+    }
+    if (method === 'GET') {
+      const f = fs.files.get(path);
+      if (!f) return new Response('nf', { status: 404 });
+      return new Response(f.body, { status: 200, headers: { 'ETag': f.etag } });
+    }
+    if (method === 'DELETE') {
+      if (fs.files.has(path)) { fs.files.delete(path); return new Response('', { status: 204 }); }
+      if (fs.dirs.has(path)) { fs.dirs.delete(path); return new Response('', { status: 204 }); }
+      return new Response('nf', { status: 404 });
+    }
+    return new Response('unsupported ' + method, { status: 405 });
+  };
+  return fs;
+}
+
+async function resetDB() {
+  db = null;
+  await new Promise((res, rej) => {
+    const rq = indexedDB.deleteDatabase('znotes');
+    rq.onsuccess = rq.onerror = rq.onblocked = () => res();
+  });
+  await loadAll();
+  await ensureDefaults();
+}
+
+window.addEventListener('load', async () => {
+  /* 纯函数测试 */
+  await t('Markdown：标题/加粗/清单/转义', () => {
+    const h = renderMarkdown('# 标题\n\n**加粗** 与 <script>x</script>\n\n- [ ] 待办\n- [x] 完成\n');
+    assert(h.includes('<h1>标题</h1>'), 'h1');
+    assert(h.includes('<strong>加粗</strong>'), 'strong');
+    assert(h.includes('&lt;script&gt;') && !h.includes('<script>'), 'escape');
+    assert(h.includes('data-zt="4"') && h.includes('checked'), 'task');
+  });
+  await t('Markdown：行内代码保护 + 链接', () => {
+    const h = renderMarkdown('`a**b**c` 与 [例](https://x.test/a)');
+    assert(h.includes('<code>a**b**c</code>'), 'code span not bolded');
+    assert(h.includes('<a href="https://x.test/a"'), 'link');
+  });
+  await t('标题/摘要提取', () => {
+    assertEq(noteTitle('# 会议记录\n正文'), '会议记录');
+    assertEq(noteTitle('第一行'), '第一行');
+    assertEq(noteSnippet('# 标题\n\n第二行内容'), '第二行内容');
+    assertEq(noteSnippet('只有一行'), '');
+  });
+  await t('md 文件往返（明文）', () => {
+    const n = { id: 'abc123', folderId: 'f', content: '# 标题\n内容\n', created: 1e12, modified: 2e12, pinned: true, enc: false, deleted: false };
+    const text = noteToFile(n, '工作');
+    const pf = parseNoteFile(text);
+    assertEq(pf.id, 'abc123'); assertEq(pf.folderName, '工作'); assertEq(pf.pinned, true);
+    assertEq(pf.created, 1e12); assertEq(pf.modified, 2e12);
+    assertEq(pf.content, '# 标题\n内容\n');
+  });
+  await t('md 文件往返（加密块）', () => {
+    const n = { id: 'k1', folderId: 'f', content: '', enc: true, payload: { iv: 'aaa', data: 'bbb' }, created: 5, modified: 6, pinned: false };
+    const pf = parseNoteFile(noteToFile(n, '私密'));
+    assert(pf.enc && pf.payload && pf.payload.iv === 'aaa' && pf.payload.data === 'bbb');
+  });
+
+  /* 数据库 + 加密 */
+  await resetDB();
+  await t('默认数据初始化', () => {
+    assert(S.foldersDoc.folders.length === 1, '默认文件夹');
+    assert(S.notes.length === 1, '欢迎笔记');
+  });
+  let fid, nid;
+  await t('文件夹加密：设置密码 + 内容落盘为密文', async () => {
+    const f = createFolder('私密');
+    fid = f.id;
+    const n = createNote(fid);
+    nid = n.id;
+    await saveNoteContent(n, '机密内容\n第二行');
+    assert(!n.enc, '未加密前是明文');
+    await setFolderPassword(fid, 'abc123');
+    const stored = await dbGet('notes', nid);
+    assert(stored.enc === true && stored.payload && stored.payload.data, 'IndexedDB 中是密文');
+    assert(!stored.content, '明文不落盘');
+    const file = noteToFile(stored, '私密');
+    assert(file.includes('BEGIN ZNOTE'), '导出文件也是密文');
+    assert(!file.includes('机密内容'), '密文不泄露内容');
+  });
+  await t('解锁 + 解密读回', async () => {
+    lockFolderNow(fid);
+    const ok = await unlockFolder(fid, 'abc123');
+    assert(ok, '正确密码解锁');
+    assertEq(S.dec[nid].content, '机密内容\n第二行', '内容一致');
+    const bad = await unlockFolder(fid, 'wrong');
+    assert(!bad, '错误密码失败');
+  });
+  await t('移除密码后恢复明文', async () => {
+    const r = await removeFolderPassword(fid, 'abc123');
+    assertEq(r, 'ok');
+    const stored = await dbGet('notes', nid);
+    assert(!stored.enc && stored.content.includes('机密内容'));
+  });
+
+  /* 文件夹合并 */
+  await t('文件夹文档合并：并集 + 删除墓碑', () => {
+    const a = { rev: 1, folders: [{ id: '1', name: 'A', rev: 5 }, { id: '2', name: 'B', rev: 3 }], deleted: [] };
+    const b = { rev: 2, folders: [{ id: '1', name: 'A2', rev: 9 }], deleted: [{ id: '2', rev: 4 }] };
+    const m = mergeFolders(a, b);
+    assertEq(m.folders.length, 1);
+    assertEq(m.folders[0].name, 'A2');
+    assert(m.deleted.some(d => d.id === '2'));
+  });
+
+  /* 同步引擎（虚拟 WebDAV） */
+  const fs = installDavShim();
+  await t('同步：首次上传', async () => {
+    await kvSet('sync', { url: 'https://dav.test/dav/', user: 'u', pass: 'p', dir: 'ZNotes', auto: true });
+    const r = await syncNow(true);
+    assert(r.ok, 'sync ok');
+    const files = Array.from(fs.files.keys()).filter(p => p.startsWith('/dav/ZNotes/') && p.endsWith('.md'));
+    assert(files.length === S.notes.filter(n => !n.deleted).length, '远端文件数一致：' + files.join(','));
+    assert(fs.files.has('/dav/ZNotes/folders.json'), 'folders.json 已上传');
+    const idx = S.kv.syncIndex;
+    for (const n of S.notes) if (!n.deleted) assert(idx[n.id] && idx[n.id].file, '索引已建立');
+  });
+  await t('同步：无变化时不上传', async () => {
+    const before = Array.from(fs.files.values()).map(f => f.etag).join();
+    await syncNow(true);
+    const after = Array.from(fs.files.values()).map(f => f.etag).join();
+    assertEq(before, after, 'etag 不应变化');
+  });
+  await t('同步：拉取远端新增（另一台设备）', async () => {
+    const f = S.foldersDoc.folders[0];
+    const n2 = { id: 'remote1', folderId: f.id, content: '来自手机的内容\n', created: 1, modified: Date.now(), pinned: false, enc: false, deleted: false };
+    const fname = slugFile('来自手机', n2.id);
+    fs.files.set('/dav/ZNotes/' + fname, { body: noteToFile(n2, f.name), etag: '"r1"' });
+    await syncNow(true);
+    const local = noteById('remote1');
+    assert(local, '已导入');
+    assert(local.content.includes('来自手机'), '内容一致');
+  });
+  await t('同步：拉取远端修改', async () => {
+    const n = S.notes[0];
+    const idx = S.kv.syncIndex[n.id];
+    const path = '/dav/ZNotes/' + idx.file;
+    const f = fs.files.get(path);
+    const pf = parseNoteFile(f.body);
+    pf.content = pf.content + '\n远端追加的一行\n';
+    pf.modified = Date.now() + 1000;
+    fs.files.set(path, { body: noteToFile({ ...n, ...pf, folderId: n.folderId, deleted: false }, folderNameOf(n)), etag: '"r2"' });
+    await syncNow(true);
+    assert(noteById(n.id).content.includes('远端追加的一行'), '远端修改已应用');
+  });
+  await t('同步：本机修改上传', async () => {
+    const n = S.notes[0];
+    await saveNoteContent(n, noteTitle(n.content) + '\n本机新行\n');
+    await syncNow(true);
+    const idx = S.kv.syncIndex[n.id];
+    const remote = fs.files.get('/dav/ZNotes/' + idx.file);
+    assert(remote.body.includes('本机新行'), '远端已有本机修改');
+    assertEq(idx.localModified, n.modified, '索引已更新');
+  });
+  await t('同步：双端同时修改 → 冲突副本', async () => {
+    const n = S.notes[0];
+    const idx = S.kv.syncIndex[n.id];
+    const path = '/dav/ZNotes/' + idx.file;
+    const f = fs.files.get(path);
+    const pf = parseNoteFile(f.body);
+    pf.content = pf.content + '\n远端并发行\n';
+    pf.modified = n.modified + 5000;
+    fs.files.set(path, { body: noteToFile({ ...n, ...pf, folderId: n.folderId, deleted: false }, folderNameOf(n)), etag: '"r3"' });
+    await saveNoteContent(n, n.enc ? n.content : (plainTextOf(n) + '\n本机并发行\n'));
+    await syncNow(true);
+    const conflict = S.notes.find(x => x.content && x.content.includes('冲突副本'));
+    assert(conflict, '存在冲突副本');
+    assert(noteById(n.id).content.includes('远端并发行'), '主笔记为远端版本');
+    const idx2 = S.kv.syncIndex;
+    assert(S.notes.every(x => !x.deleted || true), 'ok');
+    assert(idx2[conflict.id], '冲突副本已入索引');
+  });
+  await t('同步：本机删除 → 远端删除', async () => {
+    const n = noteById('remote1');
+    trashNote(n.id);
+    await syncNow(true);
+    const idx = S.kv.syncIndex;
+    const files = Array.from(fs.files.keys()).filter(p => p.endsWith('.md') && fs.files.get(p).body.includes('zid: remote1'));
+    assertEq(files.length, 0, '远端文件已删除');
+    assert(!idx[n.id], '索引已清理');
+  });
+  await t('同步：远端删除 → 本地进回收站', async () => {
+    const n = S.notes.find(x => !x.deleted);
+    const idx = S.kv.syncIndex[n.id];
+    fs.files.delete('/dav/ZNotes/' + idx.file);
+    await syncNow(true);
+    assert(noteById(n.id).deleted, '本地已标记删除');
+  });
+  await t('同步：加密笔记以密文上传、密码不上传', async () => {
+    const f = S.foldersDoc.folders.find(x => x.name === '私密') || createFolder('私密2');
+    await setFolderPassword(f.id, 'pw12345');
+    const n = createNote(f.id);
+    await saveNoteContent(n, '绝密');
+    await syncNow(true);
+    const idx = S.kv.syncIndex[n.id];
+    const remote = fs.files.get('/dav/ZNotes/' + idx.file);
+    assert(remote.body.includes('BEGIN ZNOTE'), '密文上传');
+    assert(!remote.body.includes('绝密'), '不泄露明文');
+    assert(!JSON.stringify(fs.files.get('/dav/ZNotes/folders.json').body).includes('pw12345'), 'folders.json 不含密码');
+    lockFolderNow(f.id);
+  });
+
+  /* 总结 */
+  const pass = results.filter(r => r.ok).length;
+  document.getElementById('summary').textContent =
+    (pass === results.length ? '✅ 全部通过 ' : '❌ 有失败 ') + pass + ' / ' + results.length;
+  document.title = (pass === results.length ? 'PASS' : 'FAIL') + ' ' + pass + '/' + results.length;
+});
+</script>
+</body>
+</html>

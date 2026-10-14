@@ -1,0 +1,14 @@
+{
+  // KeepNots（守心便签）Cloudflare Worker 配置
+  // 部署：node dev/sync-cloudflare.mjs && npx wrangler deploy（需先 npx wrangler login）
+  "name": "znotes",
+  "main": "worker.js",
+  "compatibility_date": "2025-03-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "vars": {
+    "TUNNEL_RPM": "120"
+  }
+}

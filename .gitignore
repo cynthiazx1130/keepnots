@@ -1,0 +1,25 @@
+# 真实笔记数据（绝不入库）
+守心便签/
+notes-app/守心便签/
+
+# 依赖与工具链（体积大、可重新获取）
+node_modules/
+.apk-tools/
+
+# 在线服务数据（账户库，绝不入库）
+notes-app/server/data/
+notes-app/server/data-test/
+
+# 构建产物（由 dev/ 脚本重建，成品发 GitHub Releases）
+notes-app/android/build/
+notes-app/android/dist/
+desktop/dist*/
+
+# 签名密钥与口令（绝不入库）
+notes-app/android/znotes-upload.keystore
+notes-app/android/keystore-pass.local
+
+# 本机调试数据与临时文件
+*.log
+.DS_Store
+Thumbs.db

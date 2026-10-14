@@ -1,0 +1,20 @@
+{
+  "name": "znotes-web",
+  "version": "1.3.0",
+  "private": true,
+  "description": "守心便签网页版构建依赖（Babel ES5 转译与 polyfill，供安卓 APK 与手机模拟预览使用）",
+  "scripts": {
+    "build:web": "node dev/build-web-assets.mjs",
+    "preview:phone": "node dev/phone-preview.mjs",
+    "build:apk": "node dev/build-apk.mjs",
+    "test": "node dev/node-test.mjs"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-env": "^7.24.0",
+    "core-js-bundle": "^3.37.1",
+    "regenerator-runtime": "^0.14.0",
+    "whatwg-fetch": "^3.6.20",
+    "css-vars-ponyfill": "^2.4.9"
+  }
+}

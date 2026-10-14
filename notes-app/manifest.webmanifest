@@ -1,0 +1,14 @@
+{
+  "name": "守心便签",
+  "short_name": "守心便签",
+  "description": "跨端同步的 Markdown 便签，支持 WebDAV 云同步与文件夹加密",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
+  "theme_color": "#f4f1e8",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

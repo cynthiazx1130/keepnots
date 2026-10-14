@@ -1,0 +1,49 @@
+{
+  "name": "znotes-desktop",
+  "productName": "守心便签",
+  "version": "1.3.0",
+  "description": "守心便签 —— 苹果备忘录风格的跨端便签，支持坚果云/WebDAV 与 Google Drive 同步、Markdown 存储、文件夹加密",
+  "main": "main.js",
+  "author": "ZNotes",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "sharp": "^0.33.5"
+  },
+  "build": {
+    "appId": "com.znotes.desktop",
+    "productName": "守心便签",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "app/**/*",
+      "icon.ico"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "守心便签",
+      "deleteAppDataOnUninstall": false
+    }
+  },
+  "allowScripts": {
+    "electron@33.4.11": true,
+    "sharp@0.33.5": true
+  }
+}

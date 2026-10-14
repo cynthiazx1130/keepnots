@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>安心便签 · 解锁器</title>
+<style>
+:root{color-scheme:light dark}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,"SF Pro SC","PingFang SC","Microsoft YaHei",sans-serif;background:#f5f5f7;color:#1d1d1f;min-height:100vh}
+.wrap{max-width:720px;margin:0 auto;padding:32px 20px 60px}
+h1{font-size:22px;font-weight:700;margin:0 0 6px}
+.hint{color:#6e6e73;font-size:13px;line-height:1.6;margin:0 0 20px}
+#drop{border:1.5px dashed #c7c7cc;border-radius:12px;padding:26px 16px;text-align:center;color:#6e6e73;font-size:14px;cursor:pointer;background:#fff;transition:.15s}
+#drop.over{border-color:#0a84ff;background:rgba(10,132,255,.06);color:#0a84ff}
+#fi{display:none}
+#ph{font-size:14px}
+.frow{display:flex;align-items:center;gap:8px;padding:5px 10px;background:rgba(10,132,255,.07);border-radius:8px;font-size:13.5px;text-align:left}
+.frow+.frow{margin-top:4px}
+.frow .fname{flex:1;word-break:break-all}
+.frow .rm{border:0;background:transparent;color:#8e8e93;font-size:14px;cursor:pointer;padding:2px 6px;border-radius:6px}
+.frow .rm:hover{color:#ff3b30;background:rgba(255,59,48,.1)}
+.fhint{font-size:12px;color:#8e8e93;margin-top:6px;text-align:left}
+.row{display:flex;gap:10px;margin-top:14px}
+input[type=password]{flex:1;padding:11px 14px;border:1px solid #d2d2d7;border-radius:10px;font-size:15px;background:#fff;color:inherit}
+input[type=password]:focus{outline:none;border-color:#0a84ff;box-shadow:0 0 0 3px rgba(10,132,255,.15)}
+button{border:0;border-radius:10px;padding:11px 20px;font-size:15px;font-weight:600;cursor:pointer;background:#0a84ff;color:#fff}
+button:hover{filter:brightness(1.08)}
+button.ghost{background:#e5e5ea;color:#1d1d1f}
+#err{color:#ff3b30;font-size:13px;margin-top:10px;min-height:18px}
+#cnt{color:#6e6e73;font-size:13px;margin:14px 0 0}
+.note{background:#fff;border-radius:14px;padding:18px 20px;margin-top:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.note header{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.note h2{font-size:17px;margin:0;flex:1;min-width:120px}
+.note .meta{color:#8e8e93;font-size:12px}
+.note .body{font-size:15px;line-height:1.7;margin-top:10px;word-break:break-word}
+.note .body h3,.note .body h4,.note .body h5{margin:.8em 0 .3em}
+.note .body p{margin:.4em 0}
+.note .body blockquote{margin:.6em 0;padding:2px 12px;border-left:3px solid #d2d2d7;color:#6e6e73}
+.note .body code{background:rgba(0,0,0,.06);border-radius:4px;padding:1px 5px;font-size:.9em}
+.note .body ul{margin:.4em 0;padding-left:22px}
+.note .body li{margin:.15em 0}
+.note .body li.task{list-style:none;margin-left:-22px}
+.note .body .box{display:inline-block;width:15px;height:15px;border:1.5px solid #8e8e93;border-radius:4px;vertical-align:-2px;margin-right:8px}
+.note .body .box.on{background:#30d158;border-color:#30d158;position:relative}
+.note .body .box.on::after{content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg)}
+.note .acts{margin-top:12px;display:flex;gap:8px}
+.note .acts button{padding:6px 14px;font-size:13px}
+.fitem{color:#ff3b30;font-size:13px;margin-top:8px;word-break:break-all}
+.ok{color:#30d158;font-weight:700}
+@media (prefers-color-scheme:dark){body{background:#1c1c1e;color:#f5f5f7}#drop,.note,input[type=password]{background:#2c2c2e;border-color:#3a3a3c}#drop{color:#98989d}button.ghost{background:#3a3a3c;color:#f5f5f7}.note .body code{background:rgba(255,255,255,.1)}.frow{background:rgba(10,132,255,.22)}.fhint{color:#98989d}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>&#128274; 安心便签 · 解锁器</h1>
+<p class="hint">这是「守心便签」加密便签的离线查看工具。选择（或拖入）本文件夹中的加密 .md 文件，输入该便签的密码即可阅读。<b>本页面完全离线运行，不会联网，密码不保存</b>；关闭页面即自动上锁。</p>
+<div id="drop"><span id="ph">点击选择 / 拖入加密的 .md 文件（可多选）</span><div id="dlist"></div></div>
+<input type="file" id="fi" multiple accept=".md,text/markdown,text/plain">
+<div class="row"><input type="password" id="pw" placeholder="便签密码" autocomplete="off"><button id="go">解锁查看</button></div>
+<div id="err"></div><div id="cnt"></div><div id="out"></div>
+<div class="row" id="lockRow" style="display:none"><button class="ghost" id="lock">&#128274; 重新锁定（清除已解密内容与密码）</button></div>
+</div>
+<script id="zd" type="application/json">{"app":"ZNotes 安心便签解锁器","version":2,"generated":"2026-10-10T03:01:48.624Z","notes":[{"zid":"mv1t5t0jor0dgf","salt":"6jKAaCIt3ilp/1w4/tPzaw==","verifier":"bc3a316d9e48eecf1c9bc853de02de9c68b8b89a7d28e1c2282b10a9c0d44f92"},{"zid":"mv1t5t0jbhd7sq","salt":"0egqUFNO0JDa1EPSnuDiQA==","verifier":"d820caa9befd609671fd7426bc5de780e6e0d57bdf6c6b7f36f61addd537e869"}]}</script>
+<script>
+var EMBEDDED = JSON.parse(document.getElementById("zd").textContent);
+/*ZUNLOCK-CORE-START*/
+function b64ToBytes(s){var b=atob(s),a=new Uint8Array(b.length);for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a}
+function bytesToB64(a){var s="";for(var i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);return btoa(s)}
+function teU(s){return new TextEncoder().encode(s)}
+async function deriveKey(password,saltB64){var km=await crypto.subtle.importKey("raw",teU(password),"PBKDF2",false,["deriveKey"]);return crypto.subtle.deriveKey({name:"PBKDF2",salt:b64ToBytes(saltB64),iterations:150000,hash:"SHA-256"},km,{name:"AES-GCM",length:256},true,["encrypt","decrypt"])}
+async function keyVerifier(key){var raw=await crypto.subtle.exportKey("raw",key);var d=await crypto.subtle.digest("SHA-256",teU("znote-verify:"+bytesToB64(new Uint8Array(raw))));return Array.from(new Uint8Array(d)).map(function(x){return x.toString(16).padStart(2,"0")}).join("")}
+function parseEncFile(text){var t=String(text).replace(/\r\n/g,"\n");var m=t.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);if(!m)return null;var meta={};m[1].split("\n").forEach(function(l){var mm=l.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);if(mm)meta[mm[1].toLowerCase()]=mm[2]});if(!meta.zid)return null;var body=(m[2]||"").replace(/^\s*\n/,"");var pm=body.match(/-----BEGIN ZNOTE-----([\s\S]*?)-----END ZNOTE-----/);if(!pm)return null;var g={};pm[1].split("\n").forEach(function(l){var mm=l.match(/^([a-z]+):\s*(\S+)/);if(mm)g[mm[1]]=mm[2]});if(!g.iv||!g.data)return null;return{zid:meta.zid.trim(),folder:(meta.folder||"").replace(/^"(.*)"$/,"$1"),created:Date.parse(meta.created||"")||0,modified:Date.parse(meta.modified||"")||0,salt:(meta.salt||"").trim(),verifier:(meta.verifier||"").trim(),iv:g.iv,data:g.data}}
+async function decryptNote(text,password){var f=parseEncFile(text);if(!f)throw new Error("无法识别的文件（不是守心便签的加密格式）");var entries=(EMBEDDED&&EMBEDDED.notes)||[];var ent=null;for(var i=0;i<entries.length;i++){if(entries[i].zid===f.zid){ent=entries[i];break}}if(!ent&&f.salt)ent={salt:f.salt,verifier:f.verifier};if(!ent)throw new Error("此解锁器未包含该便签的密码信息（请使用新版守心便签生成的解锁器）");var key=await deriveKey(password,ent.salt);if(await keyVerifier(key)!==ent.verifier)throw new Error("密码不正确");var pt;try{pt=await crypto.subtle.decrypt({name:"AES-GCM",iv:b64ToBytes(f.iv)},key,b64ToBytes(f.data))}catch(e){throw new Error("解密失败：文件可能已损坏")}var payload=JSON.parse(new TextDecoder().decode(pt));return{zid:f.zid,folder:f.folder||"",modified:f.modified,title:payload.title||"未命名",content:payload.content||""}}
+function escMd(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
+function renderMd(src){var out=[],inList=false,inQuote=false;function closeAll(){if(inList){out.push("</ul>");inList=false}if(inQuote){out.push("</blockquote>");inQuote=false}}function inline(s){return escMd(s).replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>").replace(/\*([^*]+)\*/g,"<em>$1</em>").replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>')}String(src||"").split(/\r?\n/).forEach(function(raw){var line=raw.replace(/\s+$/,""),m;if((m=line.match(/^(#{1,4})\s+(.*)/))){closeAll();out.push("<h"+(m[1].length+2)+">"+inline(m[2])+"</h"+(m[1].length+2)+">")}else if((m=line.match(/^\s*[-*]\s+\[( |x|X)\]\s+(.*)/))){if(!inList){closeAll();out.push("<ul>");inList=true}out.push('<li class="task"><span class="box '+(m[1]===" "?"off":"on")+'"></span>'+inline(m[2])+"</li>")}else if((m=line.match(/^\s*[-*+]\s+(.*)/))){if(!inList){closeAll();out.push("<ul>");inList=true}out.push("<li>"+inline(m[1])+"</li>")}else if((m=line.match(/^\s*\d+[.)]\s+(.*)/))){if(!inList){closeAll();out.push("<ul>");inList=true}out.push("<li>"+inline(m[1])+"</li>")}else if(/^\s*>\s?/.test(line)){if(!inQuote){closeAll();out.push("<blockquote>");inQuote=true}out.push(inline(line.replace(/^\s*>\s?/,"")))}else if(/^\s*(---+|\*\*\*+)\s*$/.test(line)){closeAll();out.push("<hr>")}else if(!line.trim()){closeAll()}else{closeAll();out.push("<p>"+inline(line)+"</p>")}});closeAll();return out.join("\n")}
+/*ZUNLOCK-CORE-END*/
+var $=function(s){return document.querySelector(s)};
+var PENDING=[];
+var drop=$("#drop"),fi=$("#fi");
+drop.onclick=function(){fi.click()};
+fi.onchange=function(){addFiles(fi.files);fi.value=""};
+drop.ondragover=function(e){e.preventDefault();drop.classList.add("over")};
+drop.ondragleave=function(){drop.classList.remove("over")};
+drop.ondrop=function(e){e.preventDefault();drop.classList.remove("over");addFiles(e.dataTransfer.files)};
+function addFiles(list){var n=0;Array.prototype.forEach.call(list,function(f){if(!/\.md$/i.test(f.name)&&!/\.(markdown|txt)$/i.test(f.name))return;n++;var r=new FileReader();r.onload=function(){for(var i=PENDING.length-1;i>=0;i--)if(PENDING[i].name===f.name)PENDING.splice(i,1);PENDING.push({name:f.name,text:String(r.result)});updateCount()};r.readAsText(f)});$("#err").textContent=n?"":"仅支持 .md 文件";updateCount()}
+function updateCount(){var dl=$("#dlist"),ph=$("#ph");while(dl.firstChild)dl.removeChild(dl.firstChild);ph.style.display=PENDING.length?"none":"";PENDING.forEach(function(it,i){var row=document.createElement("div");row.className="frow";var nm=document.createElement("span");nm.className="fname";nm.textContent=it.name;var x=document.createElement("button");x.className="rm";x.type="button";x.title="移除该文件";x.textContent="✕";x.onclick=function(ev){ev.stopPropagation();PENDING.splice(i,1);updateCount()};row.appendChild(nm);row.appendChild(x);dl.appendChild(row)});if(PENDING.length){var h=document.createElement("div");h.className="fhint";h.textContent="继续拖入或点击可追加文件";dl.appendChild(h)}}
+$("#pw").addEventListener("keydown",function(e){if(e.key==="Enter")$("#go").click()});
+$("#go").onclick=function(){
+var pw=$("#pw").value;if(!pw){$("#err").textContent="请输入密码";return}
+if(!PENDING.length){$("#err").textContent="请先选择加密的 .md 文件";return}
+$("#err").textContent="";$("#out").innerHTML="";
+var okN=0,failN=0;
+PENDING.slice().reverse().forEach(function(it){
+decryptNote(it.text,pw).then(function(r){okN++;renderOne(r,it.name)},function(e){failN++;var d=document.createElement("div");d.className="fitem";d.textContent="✕ "+it.name+"："+e.message;$("#out").appendChild(d)});
+});
+setTimeout(function(){$("#cnt").innerHTML=okN?('<span class="ok">已解密 '+okN+" 篇</span>"+(failN?("，失败 "+failN+" 个"):"")):"";$("#lockRow").style.display="block";$("#pw").value=""},600);
+};
+function renderOne(r,fileName){
+var art=document.createElement("article");art.className="note";
+var h=document.createElement("header");
+var h2=document.createElement("h2");h2.textContent=r.title;h.appendChild(h2);
+var meta=document.createElement("span");meta.className="meta";
+meta.textContent=(r.folder||"")+" · "+(r.modified?new Date(r.modified).toLocaleString():"");h.appendChild(meta);
+var body=document.createElement("div");body.className="body";body.innerHTML=renderMd(r.content);
+var acts=document.createElement("div");acts.className="acts";
+var dl=document.createElement("button");dl.className="ghost";dl.textContent="存为明文 .md";
+dl.onclick=function(){var blob=new Blob([r.content],{type:"text/markdown"});var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=(r.title||"未命名")+".md";a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},3000)};
+acts.appendChild(dl);h.appendChild(acts);
+art.appendChild(h);art.appendChild(body);
+$("#out").appendChild(art)}
+$("#lock").onclick=function(){PENDING=[];$("#out").innerHTML="";$("#pw").value="";$("#cnt").textContent="";$("#err").textContent="";$("#lockRow").style.display="none";updateCount()};
+</script>
+</body>
+</html>

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' http: https: data: blob:; connect-src http: https:; font-src 'self' data:; object-src 'none'; base-uri 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>守心便签</title>
+<meta name="description" content="跨端同步的 Markdown 便签，支持 WebDAV 网盘云同步与文件夹加密">
+<meta name="theme-color" content="#f4f1e8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="守心便签">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== 侧边栏（桌面端） ===== -->
+  <aside id="sidebar">
+    <div class="sb-head">
+      <svg class="logo" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="115" fill="#f7ce45"/><rect x="96" y="128" width="320" height="256" rx="28" fill="#fff"/><rect x="96" y="128" width="320" height="52" rx="26" fill="#f7ce45"/><g stroke="#d9d9de" stroke-width="18" stroke-linecap="round"><path d="M150 240h212M150 292h212M150 344h140"/></g></svg>
+      <span class="sb-title">守心便签</span>
+    </div>
+    <div class="search sb-search">
+      <span class="search-ic" id="sbSearchIcon"></span>
+      <input id="sbSearch" type="text" placeholder="搜索" autocomplete="off">
+      <button id="sbSearchClear" class="search-clear" hidden aria-label="清除搜索">✕</button>
+    </div>
+    <button id="btnNewNoteMain" class="new-note-btn" title="新建备忘录 (Ctrl+N)">＋ 新建便签</button>
+    <nav id="sbNav" aria-label="备忘录分组与视图"></nav>
+    <div id="sbList" role="list"></div>
+    <div class="sb-foot">
+      <div id="syncState" class="sync-state" title="点击立即同步">未配置同步</div>
+      <div class="sb-btns">
+        <span class="flex-sp"></span>
+        <button id="btnTrashSb" class="icon-btn" title="最近删除" aria-label="最近删除"></button>
+        <button id="btnSyncNow" class="icon-btn" title="立即同步" aria-label="立即同步"></button>
+        <button id="btnSettings" class="icon-btn" title="设置" aria-label="设置"></button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 拖拽分隔条：调整侧边栏宽度（桌面端） -->
+  <div id="sbSplit" aria-hidden="true"></div>
+
+  <!-- ===== 中栏：备忘录列表 ===== -->
+  <main id="listPane">
+    <header class="lp-head">
+      <button id="btnFolders" class="folders-btn" aria-label="切换文件夹">
+        <span class="fb-ic" id="btnFoldersIcon"></span>
+        <span id="curFolderName">所有备忘录</span>
+        <span class="fb-chev">▾</span>
+      </button>
+      <span class="flex-sp"></span>
+      <button id="btnSyncTop" class="icon-btn m-only" title="立即同步" aria-label="立即同步"></button>
+      <button id="btnSettingsTop" class="icon-btn" title="设置" aria-label="设置"></button>
+      <button id="btnNewNoteTop" class="icon-btn" title="新建备忘录 (Ctrl+N)" aria-label="新建备忘录"></button>
+    </header>
+    <div class="search-wrap">
+      <div class="search">
+        <span class="search-ic" id="searchIcon"></span>
+        <input id="searchInput" type="text" placeholder="搜索" autocomplete="off">
+        <button id="searchClear" class="search-clear" hidden aria-label="清除搜索">✕</button>
+      </div>
+    </div>
+    <div id="trashBar" hidden>
+      <span>已删除的项目保留 30 天，之后自动清除</span>
+      <button id="btnEmptyTrash" class="mini-btn">清空</button>
+    </div>
+    <div id="noteList" role="list"></div>
+    <button id="btnCompose" class="compose-btn" title="新建备忘录" aria-label="新建备忘录"></button>
+  </main>
+
+  <!-- ===== 右栏：编辑器 ===== -->
+  <section id="editorPane">
+    <div id="editorEmpty">
+      <div class="ee-ic" id="eeIcon"></div>
+      <div class="ee-t1">没有选择备忘录</div>
+      <div class="ee-t2">从左侧选择一条，或新建一条备忘录</div>
+    </div>
+    <div id="editorWrap" hidden>
+      <header id="edBar">
+        <button id="btnBack" class="back-btn"><span id="backChev"></span><span class="back-txt">备忘录</span></button>
+        <span id="edCrumb" class="ed-crumb"></span>
+        <div class="view-seg" id="viewSeg" role="tablist" aria-label="视图模式">
+          <button data-v="wys" title="编辑：所见即所得（加粗即显示为加粗）">编辑</button><button data-v="read" title="阅读：渲染预览">阅读</button>
+        </div>
+        <span class="flex-sp"></span>
+        <button id="btnSyncEd" class="icon-btn m-only" title="立即同步" aria-label="立即同步"></button>
+        <button id="btnEncrypt" class="icon-btn" title="加密" aria-label="加密"></button>
+        <button id="btnLockNow" class="icon-btn" hidden title="立即锁定" aria-label="立即锁定"></button>
+        <button id="btnPin" class="icon-btn" title="置顶" aria-label="置顶"></button>
+        <button id="btnPreview" class="icon-btn" title="预览 / 编辑" aria-label="预览"></button>
+        <button id="btnGroupEd" class="ed-group-btn" title="设置分组"><span id="btnGroupEdName">未分组</span><span class="ed-group-caret">▾</span></button>
+        <button id="btnMore" class="icon-btn" title="更多" aria-label="更多"></button>
+      </header>
+      <div id="fmtBar"></div>
+      <div id="edScroll">
+        <div id="edInner">
+          <div id="edDate"></div>
+          <textarea id="edText" placeholder="" spellcheck="false"></textarea>
+          <div id="edWys" class="md-body" contenteditable="true"></div>
+          <div id="edPreview" class="md-body" hidden></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ===== 移动端分组面板与桌面端共用顶部「分组」下拉（openGroupPanel） ===== -->
+
+<div id="menuRoot"></div>
+<div id="modalRoot"></div>
+<div id="toastRoot"></div>
+<input type="file" id="fileImage" accept="image/*" multiple hidden>
+
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
