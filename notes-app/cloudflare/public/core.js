@@ -59,6 +59,8 @@ const S = {
   kv: {},                    // 设置键值（含 syncIndex / sync 配置）
   unlocked: {},              // noteId -> CryptoKey（便签级密钥，仅内存，刷新即锁）
   dec: {},                   // noteId -> {title, content}（加密笔记解锁后的明文缓存）
+  groupKeys: {},             // fid -> CryptoKey（分组共享密码的组密钥，仅内存；组盐值存每条便签文件自身，绝不放 folders.json）
+  groupSaltCache: {},        // fid -> 组盐值（会话内缓存：设密/解锁时写入，用于单便签分组的判定）
   noteId: null,
   view: 'all',               // 列表范围：'all' | 'trash'（最近删除）
   groupFilter: null,         // 分组过滤：null=全部；否则分组 id 数组（含 '*none*' 哨兵=未分组），多选取并集
@@ -443,6 +445,14 @@ function plainNote(n) {
 
 /* 保存正文：本便签已设密码且已解锁（密钥在内存）则密文落盘，否则明文 */
 async function saveNoteContent(n, content) {
+  // 分组密码自动加密：启用分组密码的分组内，明文便签（含新入组/新建）落盘即用组密钥加密
+  if (!n.deleted && !n.enc && n.folderId && S.groupKeys[n.folderId]) {
+    const gsalt = groupEncSaltOf(n.folderId);
+    if (gsalt) {
+      n.salt = gsalt; n.verifier = await keyVerifier(S.groupKeys[n.folderId]);
+      n.enc = true; S.unlocked[n.id] = S.groupKeys[n.folderId];
+    }
+  }
   // modified 必须严格大于上一次保存值，否则同一毫秒内的两次保存会被同步引擎视为“未变化”而漏传
   n.modified = Math.max(Date.now(), (n.modified || 0) + 1);
   if (n.enc && n.salt && S.unlocked[n.id]) {
@@ -529,13 +539,29 @@ async function purgeExpiredTrash() {
     await purgeNote(n.id);
   }
 }
-/* 设置便签分组（纯归属调整，无加密拦截；目录位置随 noteSubOf 自动搬移） */
-function setNoteGroup(id, gid) {
+/* 设置便签分组（纯归属调整；目录位置随 noteSubOf 自动搬移）。
+ * 分组密码联动：移入启用分组密码的分组（且该组已解锁）时，便签自动转用组密码加密；
+ * 目标组锁定或便签持有独立密码时保持原状（UI 会引导先解锁/例外保留）。 */
+async function setNoteGroup(id, gid) {
   const n = noteById(id); if (!n) return false;
   if (gid && !folderById(gid)) return false;
   if (n.folderId === (gid || null)) return true;
+  const oldFid = n.folderId;
   n.folderId = gid || null;
   dbPut('notes', plainNote(n));
+  if (gid && !n.deleted) {
+    const nsalt = groupEncSaltOf(gid);
+    const key = S.groupKeys[gid];
+    const wasGroupNote = oldFid && n.enc && n.salt === groupEncSaltOf(oldFid);
+    if (nsalt && key && (!n.enc || (wasGroupNote && n.salt !== nsalt))) {
+      const text = n.enc ? (S.dec[n.id] ? S.dec[n.id].content : null) : n.content;
+      if (text !== null) {
+        n.salt = nsalt; n.verifier = await keyVerifier(key);
+        n.enc = true; S.unlocked[n.id] = key;
+        await saveNoteContent(n, text);
+      }
+    }
+  }
   return true;
 }
 
@@ -602,6 +628,124 @@ async function unlockNote(id, pass) {
 function lockNote(id) {
   delete S.unlocked[id];
   delete S.dec[id];
+}
+
+/* ---------------- 分组共享密码（1.8.0） ----------------
+ * 分组设一个密码，组内「无独立密码」的便签共用同一盐值/校验值（派生同一密钥）。
+ * 盐值照旧存每条便签文件自身——绝不放 folders.json（1.4 事故教训：单一来源一坏全组失效）。
+ * 有独立密码的便签例外保留，不受分组密码影响；新便签入组自动用组密码加密。
+ * 解锁分组 = 派生组密钥并批量填充 S.unlocked/S.dec（复用便签级数据流）；锁定 = 批量清除。 */
+function groupEncSaltOf(fid) {
+  if (S.groupSaltCache[fid]) return S.groupSaltCache[fid]; // 会话内显式设过（含单便签分组）
+  const counts = new Map();
+  let best = null, bestN = 0;
+  for (const n of S.notes) {
+    if (n.folderId !== fid || n.deleted || !n.enc || !n.salt) continue;
+    const c = (counts.get(n.salt) || 0) + 1;
+    counts.set(n.salt, c);
+    if (c > bestN) { bestN = c; best = n.salt; }
+  }
+  // ≥2 条便签共享同一盐值才认定「分组密码已启用」——单条带盐便签与普通便签级加密无法区分，
+  // 也绝不能把单条便签的解锁误当成分组解锁（否则解锁会殃及组内其他明文便签——check-layout 踩过）。
+  return bestN >= 2 ? best : null;
+}
+async function setGroupPassword(fid, pass) {
+  const notes = S.notes.filter(n => n.folderId === fid && !n.deleted);
+  if (!folderById(fid) || !pass || !notes.length) return { ok: false, empty: !notes.length };
+  const salt = randB64(16);
+  const key = await deriveFolderKey(pass, salt);
+  const verifier = await keyVerifier(key);
+  let encrypted = 0, kept = 0;
+  for (const n of notes) {
+    if (n.enc && n.salt) { kept++; continue; } // 独立密码便签：例外保留
+    const text = plainTextOf(n);
+    n.salt = salt; n.verifier = verifier; n.enc = true;
+    S.unlocked[n.id] = key;
+    await saveNoteContent(n, text || '');
+    encrypted++;
+  }
+  S.groupKeys[fid] = key;
+  S.groupSaltCache[fid] = salt;
+  return { ok: true, encrypted, kept };
+}
+async function unlockGroup(fid, pass) {
+  const salt = groupEncSaltOf(fid);
+  if (!salt) return false;
+  const key = await deriveFolderKey(pass, salt);
+  const encNotes = S.notes.filter(n => n.folderId === fid && n.enc && n.salt === salt && !n.deleted);
+  if (!encNotes.length) return false;
+  for (const n of encNotes) {
+    try {
+      const d = await decJSON(key, n.payload);
+      S.unlocked[n.id] = key;
+      S.dec[n.id] = d;
+      cacheTitle(n.id, d.title);
+    } catch (e) { return false; } // 任一条解密失败 = 密码不对
+  }
+  S.groupKeys[fid] = key;
+  S.groupSaltCache[fid] = salt;
+  // 组内漏网的明文便签（锁定期间新建等边缘）：解锁即归入组密码
+  for (const n of S.notes) {
+    if (n.folderId !== fid || n.deleted || n.enc) continue;
+    const text = n.content;
+    n.salt = salt; n.verifier = await keyVerifier(key);
+    n.enc = true; S.unlocked[n.id] = key;
+    await saveNoteContent(n, text);
+  }
+  return true;
+}
+function lockGroup(fid) {
+  delete S.groupKeys[fid];
+  const salt = groupEncSaltOf(fid);
+  if (!salt) return;
+  for (const n of S.notes) {
+    if (n.folderId === fid && n.enc && n.salt === salt) { delete S.unlocked[n.id]; delete S.dec[n.id]; }
+  }
+}
+async function changeGroupPassword(fid, newPass) {
+  if (!S.groupKeys[fid]) return { ok: false, locked: true }; // 须处于解锁状态
+  const oldSalt = groupEncSaltOf(fid);
+  if (!oldSalt || !newPass) return { ok: false };
+  const newSalt = randB64(16);
+  const newKey = await deriveFolderKey(newPass, newSalt);
+  const newVerifier = await keyVerifier(newKey);
+  for (const n of S.notes) {
+    if (n.folderId !== fid || n.deleted || !n.enc || n.salt !== oldSalt) continue;
+    const d = S.dec[n.id];
+    if (!d) return { ok: false, locked: true };
+    n.salt = newSalt; n.verifier = newVerifier;
+    S.unlocked[n.id] = newKey;
+    await saveNoteContent(n, d.content);
+  }
+  S.groupKeys[fid] = newKey;
+  S.groupSaltCache[fid] = newSalt;
+  return { ok: true };
+}
+async function removeGroupPassword(fid, pass) {
+  const salt = groupEncSaltOf(fid);
+  if (!salt) return { ok: false };
+  let key = S.groupKeys[fid] || null;
+  if (!key) {
+    if (!pass) return { ok: false, needpass: true };
+    key = await deriveFolderKey(pass, salt);
+    const probe = S.notes.find(n => n.folderId === fid && n.enc && n.salt === salt && !n.deleted);
+    if (!probe || (await keyVerifier(key)) !== probe.verifier) return { ok: false, wrong: true };
+  }
+  let decrypted = 0;
+  for (const n of S.notes) {
+    if (n.folderId !== fid || n.deleted || !n.enc || n.salt !== salt) continue;
+    let d = S.dec[n.id];
+    if (!d) {
+      try { d = await decJSON(key, n.payload); }
+      catch (e) { return { ok: false, wrong: true }; }
+    }
+    delete S.unlocked[n.id]; delete S.dec[n.id];
+    await saveNoteContent(n, d.content); // n.enc 仍为 true 但密钥已清 → 走明文分支
+    decrypted++;
+  }
+  delete S.groupKeys[fid];
+  delete S.groupSaltCache[fid];
+  return { ok: true, decrypted };
 }
 
 /* 一次性迁移（1.5.0）：旧「文件夹级加密」→ 便签级。
@@ -2037,5 +2181,5 @@ async function applyRemoteToNote(local, pf, e, fname, idx, sub) {
 const UIHooks = { editorFocused: () => false, extraFile: null };
 
 /* 导出给 app.js / 测试 */
-window.Z = { S, dav, gdav, syncNow, mergeFolders, parseNoteFile, noteToFile, renderMarkdown, noteTitle, noteSnippet, slugFile, gdAuthorize, gdCompleteAuth, gdRevoke, unlockerHtml, TRASH_SUB, slugDirName, noteSubOf, displayTitleOf, renameFolder, UNLOCKER_NAME, UIHooks, FolderStore, attPut, attGet, attAllNames, attIsEnc, attSeal, attOpen,
+window.Z = { S, dav, gdav, syncNow, mergeFolders, parseNoteFile, noteToFile, renderMarkdown, noteTitle, noteSnippet, slugFile, gdAuthorize, gdCompleteAuth, gdRevoke, unlockerHtml, TRASH_SUB, UNGROUPED_SUB, slugDirName, noteSubOf, displayTitleOf, renameFolder, UNLOCKER_NAME, UIHooks, FolderStore, attPut, attGet, attAllNames, attIsEnc, attSeal, attOpen, setGroupPassword, unlockGroup, lockGroup, changeGroupPassword, removeGroupPassword, groupEncSaltOf,
   createGroup, deleteGroup, setNoteGroup, setNotePassword, changeNotePassword, removeNotePassword, unlockNote, lockNote, verifyNotePassword, migrateFolderCrypto, plainNote, ensureDefaults, loadAll, createNote, saveNoteContent, kvSet, folderById, noteById, plainTextOf, displayName, cacheTitle, trashNote, restoreNote, purgeNote, emptyTrash, LEGACY_SUBS, LEGACY_TRASH_SUB, applyFoldersDoc, dbPut, randB64 };

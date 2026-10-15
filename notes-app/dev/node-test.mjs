@@ -60,6 +60,7 @@ vm.runInThisContext(readFileSync(path.join(root, 'core.js'), 'utf8'), { filename
   gdCompleteAuth, gdRevoke, unlockerHtml, TRASH_SUB, slugDirName, noteSubOf,
   displayTitleOf, displayName, renameFolder, UNLOCKER_NAME, UIHooks, FolderStore,
   attPut, attGet, attDel, attAllNames, attIsEnc, attSeal, attOpen, plainNote,
+  setGroupPassword, unlockGroup, lockGroup, changeGroupPassword, removeGroupPassword, groupEncSaltOf,
 })`);
 
 /* ---------- 断言 ---------- */
@@ -1333,6 +1334,60 @@ await t('排版：style 字段随 frontmatter 往返', async () => {
   assert(pf.style && pf.style.al === 'c' && pf.style.lh === 2 && pf.style.ps === 14, '解析还原排版字段');
   const plain = C.plainNote(n);
   assert(plain.style && plain.style.al === 'c', '内部记录保留排版字段');
+});
+
+/* ---- 1.8.0 分组共享密码 ---- */
+let gpF = null, gpA = null, gpB = null, gpC = null;
+await t('分组密码：空分组拒绝设置', async () => {
+  const fe = C.createGroup('空组');
+  const res = await C.setGroupPassword(fe.id, 'x');
+  assert(!res.ok && res.empty, '空分组拒绝');
+});
+
+await t('分组密码：设置 → 组内明文全加密 → 新便签入组自动加密 → 解锁/锁定 → 跨设备', async () => {
+  const fsG = installStubDav();
+  await C.kvSet('sync', { type: 'webdav', url: 'https://gpw.test/dav/', user: 'u', pass: 'p', dir: 'Gpw', auto: true });
+  gpF = C.createGroup('加密组');
+  gpA = C.createNote(gpF.id).id; await C.saveNoteContent(C.noteById(gpA), '明文甲');
+  gpB = C.createNote(gpF.id).id; await C.saveNoteContent(C.noteById(gpB), '明文乙');
+  const res = await C.setGroupPassword(gpF.id, 'grouppass');
+  assert(res.ok && res.encrypted === 2 && res.kept === 0, '设置分组密码：2 条明文全部加密');
+  assert(C.noteById(gpA).enc && C.noteById(gpB).enc, '组内便签均为密文');
+  assert(C.noteById(gpA).salt === C.noteById(gpB).salt, '组内共享同一盐值');
+  assert(await C.unlockNote(gpA, 'grouppass'), '便签可用组密码解锁（按条接口天然兼容）');
+  C.lockNote(gpA);
+  assert(await C.unlockGroup(gpF.id, 'grouppass'), '解锁分组');
+  assert(C.S.dec[gpA] && C.S.dec[gpB], '解锁分组后整组可读');
+  const c = C.createNote(gpF.id).id; // 新便签入组（组已解锁）→ 自动加密
+  gpC = c;
+  await C.saveNoteContent(C.noteById(c), '新入组丙');
+  assert(C.noteById(c).enc && C.noteById(c).salt === C.noteById(gpA).salt, '新便签入组自动加密（共享组盐值）');
+  C.lockGroup(gpF.id); // 锁定分组
+  assert(!C.S.dec[gpA] && !C.S.dec[gpC] && !C.S.groupKeys[gpF.id], '锁定分组：整组上锁');
+  // 同步上传 → 全新设备首轮拉取 → 解锁分组
+  await C.syncNow(true);
+  C.S.notes.length = 0; C.S.dec = {}; C.S.unlocked = {};
+  C.S.foldersDoc = { rev: 0, folders: [], deleted: [] };
+  await C.kvSet('syncIndex', {}); await C.kvSet('foldersEtag', ''); await C.kvSet('ioKey', '');
+  assert(await C.syncNow(true).then(x => x.ok), '全新设备首轮同步');
+  assert(await C.unlockGroup(gpF.id, 'grouppass'), '全新设备解锁分组');
+  assert(C.noteById(gpA).content === '' && C.S.dec[gpA].content === '明文甲', '便签甲跨设备恢复');
+  assert(C.noteById(gpC).enc && C.S.dec[gpC].content === '新入组丙', '便签丙跨设备恢复');
+});
+
+await t('分组密码：独立密码便签例外保留；更改组密码；移除组密码转明文', async () => {
+  const f = C.S.foldersDoc.folders.find(x => x.name === '加密组');
+  const d = C.createNote(f.id).id;
+  await C.saveNoteContent(C.noteById(d), '独立丁');
+  assert(await C.setNotePassword(d, 'dpass'), '独立密码设置');
+  assert(C.noteById(d).salt !== C.noteById(gpA).salt, '独立盐值 ≠ 组盐值');
+  assert((await C.changeGroupPassword(f.id, 'newpass')).ok, '更改分组密码');
+  assert(await C.unlockNote(gpA, 'newpass') && C.S.dec[gpA].content === '明文甲', '组密码便签用新密码解锁');
+  assert(await C.unlockNote(d, 'dpass'), '独立密码便签不受影响');
+  const res = await C.removeGroupPassword(f.id, '');
+  assert(res.ok && res.decrypted === 3, '移除分组密码：3 条组密码便签转明文');
+  assert(!C.noteById(gpA).enc && C.noteById(gpA).content === '明文甲', '便签转明文');
+  assert(C.noteById(d).enc, '独立密码便签不受影响');
 });
 
 /* ---- 汇总 ---- */

@@ -4,7 +4,7 @@
 'use strict';
 
 /* 应用版本：发版必改（「关于」页显示此值）；dev/build-apk.mjs 打包时会校验与 VER 一致 */
-const APP_VER = '1.7.11';
+const APP_VER = '1.8.0';
 
 /* ---------------- 多语言（设置 → 外观 可切换；默认跟随系统） ----------------
  * 机制：界面字符串以中文为源，EN_DICT 提供英文对照；t() 用于动态拼装的字符串，
@@ -48,6 +48,22 @@ const I18N_EN = {
   '标签（用逗号分隔，留空则清除）': 'Tags (comma separated; empty to clear)',
   '分组：': 'Group: ', '已移出分组': 'Moved out of groups', '未做修改': 'Nothing changed',
   '标签：': 'Tags: ', '标签已清空': 'Tags cleared',
+  '设置分组密码': 'Set Group Password', '更改分组密码': 'Change Group Password', '移除分组密码': 'Remove Group Password',
+  '解锁分组…': 'Unlock Group…', '锁定分组': 'Lock Group', '转用分组密码': 'Use Group Password',
+  '分组已解锁': 'Group unlocked', '分组已锁定': 'Group locked', '分组已加密': 'Group encrypted',
+  '输入这个分组的密码': 'Enter the group password', '输入分组密码': 'Enter group password', '再输入一次确认': 'Confirm password',
+  '两次输入的密码不一致': 'Passwords do not match', '密码不正确，请重试': 'Incorrect password, try again',
+  '已转用分组密码': 'Now using the group password',
+  '分组密码已设置：': 'Group password set: ', '已加密': 'encrypted', '条': 'note(s)',
+  ' 条独立密码便签保持不变': ' note(s) with their own passwords kept unchanged',
+  '分组密码已更改': 'Group password changed',
+  '分组密码已移除：': 'Group password removed: ', ' 条便签已转为明文': ' note(s) converted to plain text',
+  '请先在这个分组里创建便签，再设置分组密码': 'Create a note in this group first, then set a group password',
+  '分组内便签共用这一组密码。密码仅用于在本机加解密，不会上传。忘记密码将无法恢复内容。': 'Notes in this group share one password. It is used for on-device encryption only and is never uploaded. A forgotten password cannot be recovered.',
+  '分组内全部便签（含今后新建）都会用这个密码加密，解锁一次整组可用。独立设置过密码的便签不受影响。': 'All notes in this group (including future ones) are encrypted with this password; unlocking once unlocks the whole group. Notes with their own passwords are not affected.',
+  '分组内使用组密码的便签会以新密码重新加密。独立密码便签不受影响。': 'Notes using the group password will be re-encrypted with the new one. Notes with their own passwords are not affected.',
+  '移除分组密码？': 'Remove the group password?',
+  '分组内使用组密码的便签将全部转为明文（独立密码便签不受影响）': 'Notes using the group password will be converted to plain text (notes with their own passwords are not affected).',
   '已删除的项目保留 30 天，之后自动清除': 'Deleted notes are kept for 30 days',
   '清空最近删除': 'Empty Trash', '清空': 'Empty',
   '此备忘录在最近删除中': 'This note is in Trash',
@@ -1272,6 +1288,16 @@ async function openNote(id, opts = {}) {
   const n = noteById(id); if (!n) return;
   if (n.enc && !S.dec[n.id]) {
     // 加密便签：先解锁这一条，成功后直接进入（手机端主流程）
+    const gsalt = n.folderId ? groupEncSaltOf(n.folderId) : null;
+    if (gsalt && n.salt === gsalt) {
+      unlockGroupDialog(n.folderId, () => {
+        S.noteId = id;
+        document.body.classList.add('editing');
+        renderEditorState(); renderSidebar(); renderList();
+        if (opts.focus && !n.deleted) setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 60);
+      });
+      return;
+    }
     unlockNoteDialog(n, () => {
       S.noteId = id;
       document.body.classList.add('editing');
@@ -1651,6 +1677,10 @@ async function newNote() {
   // 默认明文；分组 = 过滤器中唯一勾选的分组（多选/全部时为未分组）
   let gid = null;
   if (S.view !== 'trash' && S.groupFilter && S.groupFilter.length === 1 && S.groupFilter[0] !== UNGROUPED && folderById(S.groupFilter[0])) gid = S.groupFilter[0];
+  if (gid && groupEncSaltOf(gid) && !S.groupKeys[gid]) { // 加密且锁定的分组：先解锁再新建（新便签落盘即加密）
+    await ensureGroupUnlocked(gid);
+    if (!S.groupKeys[gid]) return; // 用户取消解锁
+  }
   const n = createNote(gid);
   await saveNoteContent(n, '');
   renderSidebar(); renderList();
@@ -1661,6 +1691,15 @@ async function newNote() {
  * 普通便签/已解锁便签直接执行。取消解锁则什么都不做。 */
 function ensureNoteDecrypted(n, onOk) {
   if (!(n.enc && !S.dec[n.id])) { onOk(); return; }
+  const gsalt = n.folderId ? groupEncSaltOf(n.folderId) : null;
+  if (gsalt && n.salt === gsalt) { // 分组共享密码便签：解锁整个分组
+    unlockGroupDialog(n.folderId, () => {
+      const again = noteById(n.id);
+      if (!again || (again.enc && !S.dec[again.id])) return;
+      onOk();
+    });
+    return;
+  }
   unlockNoteDialog(n, () => {
     const again = noteById(n.id);
     if (!again || (again.enc && !S.dec[again.id])) return; // 解锁后仍不可删（异常兜底）
@@ -1686,14 +1725,42 @@ function noteMenuItems(n) {
     { label: '分组与标签…', fn: () => groupTagsDialog(n) },
   ];
   if (androidFs()) items.push({ label: '分享…', fn: () => shareNoteDialog(n) });
-  // 便签级加密：按当前状态给出加密/解锁/锁定/改密/移除密码入口
-  if (!n.enc) items.push({ label: '加密…', fn: () => notePasswordDialog(n) });
-  else if (S.dec[n.id]) items.push(
-    { label: '立即锁定', fn: () => lockThisNote(n.id) },
-    { label: '更改密码…', fn: () => changeNotePasswordDialog(n) },
-    { label: '移除密码', fn: () => removeNotePasswordDialog(n) },
-  );
-  else items.push({ label: '解锁…', fn: () => unlockNoteDialog(n) });
+  // 加密入口：分组共享密码（组内便签共用一组密，新便签入组自动加密）+ 独立便签密码（例外保留）
+  const gsalt = n.folderId ? groupEncSaltOf(n.folderId) : null;
+  const isGroupNote = !!(gsalt && n.enc && n.salt === gsalt);
+  const groupUnlocked = !!(n.folderId && S.groupKeys[n.folderId]);
+  if (isGroupNote) {
+    if (S.dec[n.id]) items.push(
+      { label: '锁定分组', fn: () => { lockGroup(n.folderId); renderAll(); toast(zt('分组已锁定')); } },
+      { label: '更改分组密码…', fn: () => changeGroupPasswordDialog(n.folderId) },
+      { label: '移除分组密码', fn: () => removeGroupPasswordFlow(n.folderId) },
+    );
+    else items.push({ label: '解锁分组…', fn: () => unlockGroupDialog(n.folderId, () => { if (S.noteId === n.id) renderEditor(); }) });
+  } else if (gsalt && groupUnlocked) {
+    if (!n.enc) items.push({ label: '转用分组密码', fn: async () => {
+      await flushSave();
+      const key = S.groupKeys[n.folderId];
+      const text = plainTextOf(n);
+      n.salt = gsalt; n.verifier = await keyVerifier(key); n.enc = true;
+      S.unlocked[n.id] = key;
+      await saveNoteContent(n, text);
+      renderAll(); scheduleSyncFromChange();
+      toast(zt('已转用分组密码'));
+    } });
+    else items.push(
+      { label: '立即锁定', fn: () => lockThisNote(n.id) },
+      { label: '更改密码…', fn: () => changeNotePasswordDialog(n) },
+      { label: '移除密码', fn: () => removeNotePasswordDialog(n) },
+    );
+  } else if (gsalt) {
+    items.push({ label: '解锁分组…', fn: () => unlockGroupDialog(n.folderId, () => { if (S.noteId === n.id) renderEditor(); }) });
+    if (!n.enc) items.push({ label: '加密…', fn: () => notePasswordDialog(n) });
+  } else {
+    if (!n.enc) {
+      items.push({ label: '加密…', fn: () => notePasswordDialog(n) });
+      if (n.folderId) items.push({ label: '设置分组密码…', fn: () => setGroupPasswordDialog(n.folderId) });
+    } else items.push({ label: '解锁…', fn: () => unlockNoteDialog(n) });
+  }
   items.push('-');
   items.push({ label: '删除', danger: true, fn: () => {
     ensureNoteDecrypted(n, () => {
@@ -2126,6 +2193,120 @@ function unlockNoteDialog(n, onDone) {
   btns.append(bc, bo); d.append(t, inp, err, hint, btns);
   addPwEye(inp); // 密码可见性开关（须在 inp 挂到 DOM 后调用）
   setTimeout(() => inp.focus(), 60);
+}
+/* ---------------- 分组共享密码：解锁 / 设定 / 更改 / 移除 ---------------- */
+function ensureGroupUnlocked(fid) {
+  return new Promise(res => {
+    if (!groupEncSaltOf(fid) || S.groupKeys[fid]) { res(true); return; }
+    unlockGroupDialog(fid, () => res(true));
+  });
+}
+function unlockGroupDialog(fid, onDone) {
+  const f = folderById(fid);
+  const d = document.createElement('div'); d.className = 'm-body';
+  const t = document.createElement('div'); t.className = 'm-title'; t.textContent = '「' + (f ? f.name : '?') + '」分组已加密';
+  const inp = document.createElement('input'); inp.type = 'password'; inp.placeholder = zt('输入这个分组的密码'); inp.setAttribute('autocomplete', 'off');
+  const err = document.createElement('div'); err.className = 'm-err';
+  const hint = document.createElement('div'); hint.className = 'm-hint'; hint.textContent = zt('分组内便签共用这一组密码。密码仅用于在本机加解密，不会上传。忘记密码将无法恢复内容。');
+  const btns = document.createElement('div'); btns.className = 'm-btns';
+  const bc = document.createElement('button'); bc.className = 'btn'; bc.textContent = zt('取消');
+  const bo = document.createElement('button'); bo.className = 'btn btn-primary'; bo.textContent = zt('解锁');
+  d.append(t, inp, err, hint, btns);
+  const h = showModal(d);
+  const submit = async () => {
+    if (!inp.value || bo.disabled) { if (!inp.value) inp.focus(); return; }
+    bo.disabled = true;
+    const ok = await unlockGroup(fid, inp.value);
+    bo.disabled = false;
+    if (ok) { h.close(); renderAll(); toast(zt('分组已解锁')); if (onDone) onDone(inp.value); }
+    else { err.textContent = zt('密码不正确，请重试'); inp.select(); d.classList.remove('shake'); void d.offsetWidth; d.classList.add('shake'); }
+  };
+  bc.onclick = () => h.close();
+  bo.onclick = submit;
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  btns.append(bc, bo); d.append(t, inp, err, hint, btns);
+  addPwEye(inp);
+  setTimeout(() => inp.focus(), 60);
+}
+function setGroupPasswordDialog(fid) {
+  const f = folderById(fid);
+  const notes = S.notes.filter(n => n.folderId === fid && !n.deleted);
+  if (!f || !notes.length) { toast(zt('请先在这个分组里创建便签，再设置分组密码')); return; }
+  const d = document.createElement('div'); d.className = 'm-body';
+  const t = document.createElement('div'); t.className = 'm-title'; t.textContent = zt('设置分组密码') + ' · ' + f.name;
+  const mk = (ph) => { const i = document.createElement('input'); i.type = 'password'; i.placeholder = ph; i.setAttribute('autocomplete', 'off'); return i; };
+  const p1 = mk(zt('输入分组密码')); const p2 = mk(zt('再输入一次确认'));
+  const err = document.createElement('div'); err.className = 'm-err';
+  const hint = document.createElement('div'); hint.className = 'm-hint';
+  hint.textContent = zt('分组内全部便签（含今后新建）都会用这个密码加密，解锁一次整组可用。独立设置过密码的便签不受影响。');
+  const btns = document.createElement('div'); btns.className = 'm-btns';
+  const bc = document.createElement('button'); bc.className = 'btn'; bc.textContent = zt('取消');
+  const bo = document.createElement('button'); bo.className = 'btn btn-primary'; bo.textContent = zt('保存');
+  d.append(t, p1, p2, err, hint, btns);
+  const h = showModal(d);
+  addPwEye(p1); addPwEye(p2);
+  const submit = async () => {
+    if (bo.disabled) return;
+    if (!p1.value || p1.value !== p2.value) { err.textContent = zt('两次输入的密码不一致'); return; }
+    bo.disabled = true;
+    const res = await setGroupPassword(fid, p1.value);
+    bo.disabled = false;
+    if (!res.ok) { err.textContent = zt('请先在这个分组里创建便签，再设置分组密码'); return; }
+    h.close(); renderAll();
+    toast(zt('分组密码已设置：') + zt('已加密') + ' ' + res.encrypted + zt(' 条') + (res.kept ? '，' + res.kept + zt(' 条独立密码便签保持不变') : ''));
+  };
+  bc.onclick = () => h.close();
+  bo.onclick = submit;
+  p1.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); p2.focus(); } });
+  p2.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  btns.append(bc, bo); d.append(t, p1, p2, err, hint, btns);
+  setTimeout(() => p1.focus(), 60);
+}
+function changeGroupPasswordDialog(fid) {
+  const f = folderById(fid);
+  if (!S.groupKeys[fid]) { ensureGroupUnlocked(fid).then(() => { if (S.groupKeys[fid]) changeGroupPasswordDialog(fid); }); return; }
+  const d = document.createElement('div'); d.className = 'm-body';
+  const t = document.createElement('div'); t.className = 'm-title'; t.textContent = zt('更改分组密码') + ' · ' + (f ? f.name : '?');
+  const mk = (ph) => { const i = document.createElement('input'); i.type = 'password'; i.placeholder = ph; i.setAttribute('autocomplete', 'off'); return i; };
+  const p1 = mk(zt('输入新分组密码')); const p2 = mk(zt('再输入一次确认'));
+  const err = document.createElement('div'); err.className = 'm-err';
+  const hint = document.createElement('div'); hint.className = 'm-hint'; hint.textContent = zt('分组内使用组密码的便签会以新密码重新加密。独立密码便签不受影响。');
+  const btns = document.createElement('div'); btns.className = 'm-btns';
+  const bc = document.createElement('button'); bc.className = 'btn'; bc.textContent = zt('取消');
+  const bo = document.createElement('button'); bo.className = 'btn btn-primary'; bo.textContent = zt('保存');
+  d.append(t, p1, p2, err, hint, btns);
+  const h = showModal(d);
+  addPwEye(p1); addPwEye(p2);
+  const submit = async () => {
+    if (bo.disabled) return;
+    if (!p1.value || p1.value !== p2.value) { err.textContent = zt('两次输入的密码不一致'); return; }
+    bo.disabled = true;
+    const res = await changeGroupPassword(fid, p1.value);
+    bo.disabled = false;
+    if (res.ok) { h.close(); renderAll(); scheduleSyncFromChange(); toast(zt('分组密码已更改')); return; }
+    err.textContent = res.locked ? zt('分组处于锁定状态，请先解锁') : zt('更改失败，请重试');
+  };
+  bc.onclick = () => h.close();
+  bo.onclick = submit;
+  p1.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); p2.focus(); } });
+  p2.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  btns.append(bc, bo); d.append(t, p1, p2, err, hint, btns);
+  setTimeout(() => p1.focus(), 60);
+}
+function removeGroupPasswordFlow(fid) {
+  const f = folderById(fid);
+  const cnt = S.notes.filter(n => n.folderId === fid && !n.deleted && n.enc && n.salt === groupEncSaltOf(fid)).length;
+  const go = (pass) => removeGroupPassword(fid, pass).then(res => {
+    if (res.ok) { renderAll(); scheduleSyncFromChange(); toast(zt('分组密码已移除：') + res.decrypted + zt(' 条便签已转为明文')); }
+    else if (res.wrong) toast(zt('密码不正确'));
+  });
+  if (S.groupKeys[fid]) {
+    showConfirm({ title: zt('移除分组密码？'), message: zt('分组内使用组密码的便签将全部转为明文（独立密码便签不受影响）'), okText: zt('移除') }).then(ok => { if (ok) go(''); });
+  } else {
+    unlockGroupDialog(fid, (pass) => {
+      showConfirm({ title: zt('移除分组密码？'), message: zt('分组内使用组密码的便签将全部转为明文（独立密码便签不受影响）'), okText: zt('移除') }).then(ok => { if (ok) go(pass); });
+    });
+  }
 }
 /* 弹解锁框并等结果：返回是否解锁成功（取消/关闭弹窗视为未解锁）；onPass 收集用户输入的密码供复用 */
 function unlockNoteOnce(n, onPass) {
@@ -3505,10 +3686,17 @@ function bindEvents() {
     else showMenu(r.right - 200, r.bottom + 6, noteMenuItems(n));
   };
   btnLockNow.onclick = () => { const n = noteById(S.noteId); if (n) lockThisNote(n.id); };
-  // 编辑器「加密」按钮（按便签）：未加密 → 设密码加密这一条；已解锁 → 立即锁定；锁定态 → 解锁
+  // 编辑器「加密」按钮：分组密码便签 → 解锁/锁定整个分组；独立便签 → 原有三态
   $('#btnEncrypt').onclick = () => {
     const n = S.noteId ? noteById(S.noteId) : null;
     if (!n || n.deleted) return;
+    const gsalt = n.folderId ? groupEncSaltOf(n.folderId) : null;
+    if (gsalt && n.salt === gsalt) {
+      if (S.dec[n.id]) lockGroup(n.folderId);
+      else unlockGroupDialog(n.folderId, () => { renderEditor(); });
+      renderEditor(); renderList();
+      return;
+    }
     if (!n.enc) notePasswordDialog(n);
     else if (S.dec[n.id]) lockThisNote(n.id);
     else unlockNoteDialog(n);
