@@ -1093,7 +1093,8 @@ async function applyFoldersDoc(doc) {
 /* ---------------- 同步引擎 ---------------- */
 async function importRemoteNote(pf, fname, sub) {
   let f = S.foldersDoc.folders.find(x => x.name === pf.folderName) || null;
-  if (!f) f = S.foldersDoc.folders[0] || createGroup('备忘录');
+  if (!f && pf.folderName === UNGROUPED_SUB) { /* 云端「未分组/」目录：导入为无分组，绝不落进第一个分组 */ }
+  else if (!f) f = S.foldersDoc.folders[0] || createGroup('备忘录');
   const n = {
     id: pf.id, folderId: f ? f.id : null, content: pf.content,
     enc: pf.enc, created: pf.created, modified: pf.modified,
@@ -1137,6 +1138,7 @@ async function stashConflict(n) {
  *   「最近删除/」存放已删除便签；folders.json、account.json、deleted.json、解锁器在根目录。
  * 历史目录（根目录散文件、安心便签/、便签/、加密便签/、回收站便签/）在升级后自动迁移。 */
 const TRASH_SUB = '最近删除';
+const UNGROUPED_SUB = '未分组'; // 无分组便签的云端子目录（slugDirName 空名兜底；同步每轮必枚举，1.7.9）
 const LEGACY_TRASH_SUB = '回收站便签';
 const LEGACY_SUBS = ['便签', '加密便签', '回收站便签', '安心便签'];
 const UNLOCKER_NAME = '安心便签-解锁器.html';
@@ -1618,18 +1620,8 @@ async function syncNow(manual = false) {
         try { await listSub(sub); return true; } catch (e2) { return false; }
       }
     };
-    const folderDirs = [];
-    for (const f of S.foldersDoc.folders) {
-      const d = slugDirName(f.name);
-      if (!folderDirs.includes(d)) folderDirs.push(d);
-    }
-    const listed = { '': true, [TRASH_SUB]: true };
     const idxPre = S.kv.syncIndex || {};
-    for (const d of folderDirs) listed[d] = await tryList(d, true);
-    const hasTrashLocal = S.notes.some(n => n.deleted);
-    /* 回收站目录每轮必枚举：他端删除的证据是「文件被挪进回收站」这一位置变化，
-     * 跳过枚举会让本机看不到删除，反而把缓存里的旧便签补传回原位置（删除复活）。 */
-    listed[TRASH_SUB] = await tryList(TRASH_SUB, hasTrashLocal);
+    const listed = { '': true };
     /* 历史目录迁移探测（根目录散文件、「安心便签/」「便签/」「加密便签/」「回收站便签/」）：
      * 枚举旧位置防止迁移期间误判；上传段自动把每条笔记搬到新位置（传新删旧），
      * 全部搬完后停止探测，不再消耗请求。 */
@@ -1649,13 +1641,16 @@ async function syncNow(manual = false) {
       const legacyLeft = Object.keys(idxPre).some(z => idxPre[z] && LEGACY_SUBS.includes(idxPre[z].sub || ''));
       if (!legacyLeftover && !legacyLeft) await kvSet('legacySubsDone', 1);
     }
-    const rfiles = {};
+    let rfiles = {};
     for (const e of entries) {
       if (e.dir) continue;
       if (/\.md$/i.test(e.name) || e.name === 'folders.json') rfiles[e.name] = e;
     }
 
-    /* 1. 文件夹文档合并（etag 未变化则跳过下载，省一个请求） */
+    /* 1. 文件夹文档合并（etag 未变化则跳过下载，省一个请求）——必须先于子目录枚举：
+     *    全新设备首轮 foldersDoc 为空，先恢复分组清单，本轮才能枚举各分组目录并拉到便签
+     *    （1.7.9 修复：原先 folders.json 在枚举之后才应用，新设备首轮只拉到分组结构，
+     *    便签要等第二轮自动同步才出现，看起来就是「云便签同步不过来」。） */
     if (rfiles['folders.json']) {
       const fe = rfiles['folders.json'].etag || '';
       if (!switched && fe && S.kv.foldersEtag === fe) { /* 远端未变，跳过下载 */ }
@@ -1668,6 +1663,30 @@ async function syncNow(manual = false) {
       }
     } else if (S.foldersDoc.folders.length) {
       foldersDirty = true; // 远端缺失 folders.json（首次使用/被删）：补传
+    }
+
+    /* 2. 子目录枚举：各软件文件夹的同名目录（此时分组清单已恢复，全新设备首轮也能枚举）
+     *    + 「最近删除」+ 「未分组」。
+     *    某目录本轮枚举失败时跳过其删除/还原语义判定，绝不因网络抖动误伤本地数据。 */
+    const folderDirs = [];
+    for (const f of S.foldersDoc.folders) {
+      const d = slugDirName(f.name);
+      if (!folderDirs.includes(d)) folderDirs.push(d);
+    }
+    for (const d of folderDirs) listed[d] = await tryList(d, true);
+    const hasTrashLocal = S.notes.some(n => n.deleted);
+    /* 回收站目录每轮必枚举：他端删除的证据是「文件被挪进回收站」这一位置变化，
+     * 跳过枚举会让本机看不到删除，反而把缓存里的旧便签补传回原位置（删除复活）。 */
+    listed[TRASH_SUB] = await tryList(TRASH_SUB, hasTrashLocal);
+    /* 未分组/ 每轮必枚举：无分组便签的默认归属目录——它不是 foldersDoc 里的命名分组，
+     * 此前任何轮次都不枚举，新设备永远拉不到未分组便签，他端对未分组便签的增删也看不见。 */
+    const hasUngroupedLocal = S.notes.some(n => !n.deleted && !n.folderId);
+    listed[UNGROUPED_SUB] = await tryList(UNGROUPED_SUB, hasUngroupedLocal);
+    /* 全量文件清单（含各分组子目录）——下载合并、补传与残留判定均以此为准 */
+    rfiles = {};
+    for (const e of entries) {
+      if (e.dir) continue;
+      if (/\.md$/i.test(e.name) || e.name === 'folders.json') rfiles[e.name] = e;
     }
 
     /* 1.5 账户档案：远端有 account.json 且与本地指纹不同 → 拉下来存 kv，供「登录」恢复配置。

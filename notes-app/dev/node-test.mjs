@@ -645,9 +645,40 @@ await t('Google Drive：OAuth 授权流程（PKCE + 状态校验）', async () =
   assert(!location.search, '回调参数已清理');
 });
 
+/* ---- 1.7.9 新设备拉取修复：folders.json 先于子目录枚举 + 未分组/ 每轮枚举 ---- */
+let fsF = null; // 两个用例共用同一云端桩
+await t('同步：全新设备首轮即拉取分组便签（folders.json 先于子目录枚举）', async () => {
+  fsF = installStubDav();
+  await C.kvSet('sync', { type: 'webdav', url: 'https://fresh.test/dav/', user: 'u', pass: 'p', dir: 'Fresh', auto: true });
+  // 云端：分组清单 + 分组子目录里的便签（旧设备同步上去的形态）
+  fsF.files.set('Fresh/folders.json', { body: JSON.stringify({ rev: 1, folders: [{ id: 'fm1', name: 'memo', order: 0, rev: 1 }], deleted: [] }), etag: '"fj1"' });
+  const rn = { id: 'remf1', folderId: 'fm1', content: '来自旧设备的便签\n', created: 1, modified: Date.now(), pinned: false, enc: false };
+  fsF.files.set('Fresh/memo/' + C.slugFile('来自旧设备', rn.id), { body: C.noteToFile(rn, 'memo'), etag: '"r1"' });
+  // 全新设备状态：本地库/分组/索引全空，ioKey 置空强制走「首次使用」分支
+  C.S.notes.length = 0; C.S.dec = {}; C.S.unlocked = {};
+  C.S.foldersDoc = { rev: 0, folders: [], deleted: [] };
+  await C.kvSet('syncIndex', {}); await C.kvSet('foldersEtag', ''); await C.kvSet('ioKey', '');
+  const r = await C.syncNow(true);
+  assert(r.ok, '首轮同步成功: ' + (r.message || ''));
+  assert(C.S.foldersDoc.folders.some(f => f.name === 'memo'), '分组清单首轮即恢复');
+  assert(C.noteById('remf1') && C.noteById('remf1').content.includes('来自旧设备'), '同一轮同步便签已拉取（无需等第二轮）');
+});
+
+await t('同步：未分组便签跨设备拉取（未分组/ 每轮必枚举）', async () => {
+  // 接上例：云端「未分组/」出现他端新增的便签，本机下一轮同步应导入且不落进任何分组
+  fsF.files.set('Fresh/未分组/' + C.slugFile('随手记', 'remu1'), {
+    body: C.noteToFile({ id: 'remu1', folderId: null, content: '未分组的随手记\n', created: 2, modified: Date.now(), pinned: false, enc: false }, '未分组'), etag: '"r2"',
+  });
+  const r = await C.syncNow(true);
+  assert(r.ok, '同步成功');
+  const n = C.noteById('remu1');
+  assert(n && n.content.includes('随手记'), '未分组便签已拉取');
+  assert(n.folderId === null, '导入为无分组（不落进第一个分组/不新建备忘录）');
+});
+
 /* ---- 同步请求预算（坚果云 600 次/30 分钟友好；独立干净场景） ---- */
-/* 2026-09-22 起「最近删除/」目录每轮必枚举（删除复活修复的代价，+1 请求/轮，约 Nutz 限额 2-5%） */
-await t('同步请求预算：空闲同步仅 4 个枚举请求（含回收站），残留副本一轮清干净', async () => {
+/* 2026-09-22 起「最近删除/」目录每轮必枚举（删除复活修复的代价）；2026-10-15 起「未分组/」每轮必枚举（新设备拉取修复），共 +2 请求/轮 */
+await t('同步请求预算：空闲同步仅 5 个枚举请求（含回收站/未分组），残留副本一轮清干净', async () => {
   // 全新状态：清空本地库 + 全新远端桩
   stores.notes.clear(); stores.folders.clear(); stores.kv.clear();
   C.S.notes.length = 0; C.S.dec = {}; C.S.unlocked = {};
@@ -688,11 +719,11 @@ await t('同步请求预算：空闲同步仅 4 个枚举请求（含回收站�
   assert(count.some(m => m === 'rm:' + staleKey), '同轮删除残留副本');
   assert(!davfs2.files.has(staleKey), '残留副本已从网盘清除');
 
-  // 场景 2（核心断言）：稳态空闲同步只有 4 次目录枚举（根 + 便签 + 机密夹 + 回收站），无任何下载/上传
+  // 场景 2（核心断言）：稳态空闲同步只有 5 次目录枚举（根 + 分组 + 回收站 + 未分组），无任何下载/上传
   count = mkCount();
   const rb = await C.syncNow(false);
   assert(rb.ok, '稳态空闲同步成功');
-  assertEq(count.length, 5, '总请求数为 5（根目录 + 各分组目录 + 回收站 + attachments）');
+  assertEq(count.length, 6, '总请求数为 6（根目录 + 各分组目录 + 回收站 + 未分组 + attachments）');
   assert(count.every(m => m === 'propfind'), '全部是 Depth-1 目录枚举：无 Depth-0 探测、无 folders.json 下载/上传');
 
   // 场景 3：解除该便签的密码后，密文转明文、解锁器撤下
@@ -707,11 +738,11 @@ await t('同步请求预算：空闲同步仅 4 个枚举请求（含回收站�
   count = mkCount();
   const rd = await C.syncNow(false);
   assert(rd.ok, '子目录收尾同步成功');
-  assertEq(count.length, 5, '收尾轮为 5 个枚举请求（上轮原分组目录尚有内容）');
+  assertEq(count.length, 6, '收尾轮为 6 个枚举请求（上轮原分组目录尚有内容）');
   count = mkCount();
   const reSync = await C.syncNow(false);
   assert(reSync.ok, '最终稳态同步成功');
-  assertEq(count.length, 5, '收敛后为根目录 + 备忘录 + 机密夹 + 回收站 + attachments 5 个枚举请求（分组仍在）');
+  assertEq(count.length, 6, '收敛后为根目录 + 备忘录 + 机密夹 + 回收站 + 未分组 + attachments 6 个枚举请求（分组仍在）');
   assert(count.every(m => m === 'propfind'), '仅 Depth-1 枚举');
 });
 
