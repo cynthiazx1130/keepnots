@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.znotes.app"
-    android:versionCode="30"
-    android:versionName="1.7.10">
+    android:versionCode="31"
+    android:versionName="1.7.11">
 
   <!-- 基线 = Google Play 要求（minSdk 24 / targetSdk 36，2026-08 起新应用强制 target 36）。
        自用 APK 由 dev/build-apk.mjs 在暂存副本里回写为 minSdk 19 / targetSdk 28（兼容安卓 4.4）。 -->

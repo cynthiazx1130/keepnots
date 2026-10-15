@@ -673,6 +673,37 @@ await t('同步：加密便签跨设备拉取后可用原密码解锁（盐值/�
 });
 
 /* ---- 1.7.9 新设备拉取修复：folders.json 先于子目录枚举 + 未分组/ 每轮枚举 ---- */
+/* ---- 1.7.11 恢复通道：folders.json 旧版回滚后自动把文件夹盐值迁移回便签 ---- */
+await t('同步：folders.json 历史回滚后，文件夹盐值自动迁移回无盐加密便签', async () => {
+  // 设备 A：正常加密便签上传（带盐值）
+  const fsR = installStubDav();
+  await C.kvSet('sync', { type: 'webdav', url: 'https://roll.test/dav/', user: 'u', pass: 'p', dir: 'Roll', auto: true });
+  const foR = C.createGroup('恢复夹');
+  const nidR = C.createNote(foR.id).id;
+  await C.saveNoteContent(C.noteById(nidR), '恢复测试正文');
+  assert(await C.setNotePassword(nidR, 'pass1234'), '设置便签密码');
+  C.lockNote(nidR);
+  assert(await C.syncNow(true).then(x => x.ok), '设备 A 上传成功');
+  const fpathR = [...fsR.files.keys()].find(k => k.startsWith('Roll/恢复夹/') && k.endsWith('.md'));
+  const saltLine = (fsR.files.get(fpathR).body.match(/^salt: (.*)$/m) || [])[1];
+  const verLine = (fsR.files.get(fpathR).body.match(/^verifier: (.*)$/m) || [])[1];
+  assert(saltLine && verLine, '云端文件带盐值/校验值');
+  // 模拟用户遇到的状态：folders.json 被换成「带 locked/salt 的旧版」，便签文件被剥掉盐值行（文件夹加密时代格式）
+  fsR.files.set('Roll/folders.json', { body: JSON.stringify({ rev: 2, folders: [{ id: foR.id, name: '恢复夹', order: 0, rev: 9, locked: true, salt: saltLine, verifier: verLine }], deleted: [] }), etag: '"fj-old"' });
+  fsR.files.set(fpathR, { body: fsR.files.get(fpathR).body.replace(/^salt: .*\n/m, '').replace(/^verifier: .*\n/m, ''), etag: '"r-stale"' });
+  // 全新设备拉取：同轮同步内即完成「导入 → 从旧版 folders.json 迁移盐值 → 补传带盐文件」
+  C.S.notes.length = 0; C.S.dec = {}; C.S.unlocked = {};
+  C.S.foldersDoc = { rev: 0, folders: [], deleted: [] };
+  await C.kvSet('syncIndex', {}); await C.kvSet('foldersEtag', ''); await C.kvSet('ioKey', '');
+  const r = await C.syncNow(true);
+  assert(r.ok, '首轮同步成功');
+  const n0 = C.noteById(nidR);
+  assert(n0 && n0.enc, '加密便签已导入');
+  assert(n0.salt === saltLine && n0.verifier === verLine, '盐值已从旧版 folders.json 自动迁移回便签');
+  assert(await C.unlockNote(nidR, 'pass1234'), '原密码解锁成功');
+  assert(fsR.files.get(fpathR).body.includes('salt: ') && fsR.files.get(fpathR).body.includes('verifier: '), '云端文件已补上盐值/校验值');
+});
+
 let fsF = null; // 两个用例共用同一云端桩
 await t('同步：全新设备首轮即拉取分组便签（folders.json 先于子目录枚举）', async () => {
   fsF = installStubDav();

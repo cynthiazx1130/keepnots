@@ -1651,12 +1651,18 @@ async function syncNow(manual = false) {
      *    全新设备首轮 foldersDoc 为空，先恢复分组清单，本轮才能枚举各分组目录并拉到便签
      *    （1.7.9 修复：原先 folders.json 在枚举之后才应用，新设备首轮只拉到分组结构，
      *    便签要等第二轮自动同步才出现，看起来就是「云便签同步不过来」。） */
+    const preMergeSalts = [];
     if (rfiles['folders.json']) {
       const fe = rfiles['folders.json'].etag || '';
       if (!switched && fe && S.kv.foldersEtag === fe) { /* 远端未变，跳过下载 */ }
       else {
         try {
           const rd = JSON.parse(await io.get(dir, 'folders.json'));
+          /* 旧版（1.4 文件夹加密时代）folders.json 的文件夹盐值：合并会按 rev 剥掉这些字段，
+           * 先抢救出来，拉取完成后迁移回对应分组的无盐加密便签（1.7.11 恢复通道）。 */
+          for (const f of (rd.folders || [])) {
+            if (f.locked && f.salt) preMergeSalts.push({ id: f.id, name: f.name, salt: f.salt, verifier: f.verifier });
+          }
           await applyFoldersDoc(mergeFolders(S.foldersDoc, rd));
           await kvSet('foldersEtag', fe);
         } catch (e) { emit('status', 'folders.json 解析失败，已跳过'); }
@@ -1826,6 +1832,24 @@ async function syncNow(manual = false) {
       } else {
         if (iRec) iRec.localModified = 0; // 本机较新 → 待上传
       }
+    }
+
+    /* 2.5 旧版文件夹盐值迁移（1.7.11 恢复通道）：1.4「文件夹加密」时代的盐值存在 folders.json
+     *     里、便签文件本身没有；若云端旧版 folders.json 被恢复（坚果云历史版本），在拉取完成后
+     *     把盐值迁移回对应分组的无盐加密便签，并置待上传——云端文件随之补上 salt/verifier 行。 */
+    for (const s of preMergeSalts) {
+      const f = S.foldersDoc.folders.find(x => x.id === s.id) || S.foldersDoc.folders.find(x => x.name === s.name);
+      if (!f) continue;
+      let touched = 0;
+      for (const n of S.notes) {
+        if (n.folderId !== f.id || !n.enc || n.salt) continue;
+        n.salt = s.salt; n.verifier = s.verifier;
+        await dbPut('notes', plainNote(n));
+        const rec = (S.kv.syncIndex || {})[n.id];
+        if (rec) rec.localModified = 0; // 待上传：云端便签文件补写盐值行
+        touched++;
+      }
+      if (touched) await kvSet('syncIndex', S.kv.syncIndex || {});
     }
 
     /* 3. 以软件为准：云端文件缺失（用户在网盘上误删）不传播删除——保留索引，
