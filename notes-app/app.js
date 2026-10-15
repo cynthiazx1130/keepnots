@@ -4,7 +4,7 @@
 'use strict';
 
 /* 应用版本：发版必改（「关于」页显示此值）；dev/build-apk.mjs 打包时会校验与 VER 一致 */
-const APP_VER = '1.7.9';
+const APP_VER = '1.7.10';
 
 /* ---------------- 多语言（设置 → 外观 可切换；默认跟随系统） ----------------
  * 机制：界面字符串以中文为源，EN_DICT 提供英文对照；t() 用于动态拼装的字符串，
@@ -2106,6 +2106,11 @@ function unlockNoteDialog(n, onDone) {
   const submit = async () => {
     if (!inp.value || bo.disabled) { if (!inp.value) inp.focus(); return; }
     bo.disabled = true;
+    if (!n.salt) { // 缺加密元数据：任何密码都不可能解锁，给针对性提示而非误导性的「密码不正确」
+      err.textContent = '这条便签缺少加密元数据（盐值），通常是旧版本或其他软件写入的文件——内容可能是更早的旧格式，无法在此解锁。请以手机/电脑端的数据为准。';
+      bo.disabled = false;
+      return;
+    }
     const ok = await unlockNote(n.id, inp.value);
     bo.disabled = false;
     if (ok) { h.close(); renderAll(); toast('已解锁'); if (onDone) onDone(inp.value); }

@@ -597,6 +597,7 @@ await t('同步（Google Drive）：云端误删 → 本机不受影响并自动
   assert(gg.byName(C.S.kv.syncIndex[n.id].file), '云端文件已自动补传');
 });
 
+
 await t('同步（Google Drive）：加密笔记密文上传到所属文件夹目录 + 解锁器', async () => {
   const en = C.createNote(fid);
   await C.saveNoteContent(en, '云端绝密\n绝密正文');
@@ -643,6 +644,32 @@ await t('Google Drive：OAuth 授权流程（PKCE + 状态校验）', async () =
   location.search = '?code=x&state=forged';
   assert(!(await C.gdCompleteAuth()), '伪造 state 被拒绝');
   assert(!location.search, '回调参数已清理');
+});
+
+await t('同步：加密便签跨设备拉取后可用原密码解锁（盐值/校验值随文件走）', async () => {
+  // 设备 A：加密便签上传（锁定态）
+  const fsE = installStubDav();
+  await C.kvSet('sync', { type: 'webdav', url: 'https://encx.test/dav/', user: 'u', pass: 'p', dir: 'EncX', auto: true });
+  const foE = C.createGroup('加密夹');
+  const nidE = C.createNote(foE.id).id;
+  await C.saveNoteContent(C.noteById(nidE), '跨设备机密\n正文');
+  assert(await C.setNotePassword(nidE, 'pass1234'), '设备 A 设置便签密码');
+  C.lockNote(nidE);
+  const rA = await C.syncNow(true);
+  assert(rA.ok, '设备 A 上传成功');
+  const cloudFile = [...fsE.files.keys()].find(k => k.startsWith('EncX/加密夹/') && k.endsWith('.md'));
+  assert(cloudFile, '密文已上传');
+  assert(fsE.files.get(cloudFile).body.includes('salt: ') && fsE.files.get(cloudFile).body.includes('verifier: '), '云端文件自带盐值/校验值');
+  // 设备 B：全新客户端拉取 → 原密码解锁
+  C.S.notes.length = 0; C.S.dec = {}; C.S.unlocked = {};
+  C.S.foldersDoc = { rev: 0, folders: [], deleted: [] };
+  await C.kvSet('syncIndex', {}); await C.kvSet('foldersEtag', ''); await C.kvSet('ioKey', '');
+  const rB = await C.syncNow(true);
+  assert(rB.ok, '设备 B 首轮同步成功');
+  const nb = C.noteById(nidE);
+  assert(nb && nb.enc, '加密便签已拉取');
+  assert(nb.salt && nb.verifier, '盐值/校验值随文件到达');
+  assert(await C.unlockNote(nidE, 'pass1234'), '原密码解锁成功');
 });
 
 /* ---- 1.7.9 新设备拉取修复：folders.json 先于子目录枚举 + 未分组/ 每轮枚举 ---- */
