@@ -4,7 +4,7 @@
 'use strict';
 
 /* 应用版本：发版必改（「关于」页显示此值）；dev/build-apk.mjs 打包时会校验与 VER 一致 */
-const APP_VER = '1.8.0';
+const APP_VER = '1.8.1';
 
 /* ---------------- 多语言（设置 → 外观 可切换；默认跟随系统） ----------------
  * 机制：界面字符串以中文为源，EN_DICT 提供英文对照；t() 用于动态拼装的字符串，
@@ -50,6 +50,8 @@ const I18N_EN = {
   '标签：': 'Tags: ', '标签已清空': 'Tags cleared',
   '设置分组密码': 'Set Group Password', '更改分组密码': 'Change Group Password', '移除分组密码': 'Remove Group Password',
   '解锁分组…': 'Unlock Group…', '锁定分组': 'Lock Group', '转用分组密码': 'Use Group Password',
+  '删除这条便签？': 'Delete this note?',
+  '它缺少加密元数据（旧格式文件），内容已无法恢复，删除后不可撤销。': 'It lacks encryption metadata (legacy format) and its content cannot be recovered. Deletion is irreversible.',
   '分组已解锁': 'Group unlocked', '分组已锁定': 'Group locked', '分组已加密': 'Group encrypted',
   '输入这个分组的密码': 'Enter the group password', '输入分组密码': 'Enter group password', '再输入一次确认': 'Confirm password',
   '两次输入的密码不一致': 'Passwords do not match', '密码不正确，请重试': 'Incorrect password, try again',
@@ -1698,6 +1700,14 @@ function ensureNoteDecrypted(n, onOk) {
       if (!again || (again.enc && !S.dec[again.id])) return;
       onOk();
     });
+    return;
+  }
+  if (!n.salt) { // 缺加密元数据的旧格式便签：无法解锁也不该被解锁保护——确认后直接放行删除/彻底删除
+    showConfirm({
+      title: zt('删除这条便签？'),
+      message: zt('它缺少加密元数据（旧格式文件），内容已无法恢复，删除后不可撤销。'),
+      okText: zt('删除'), danger: true,
+    }).then(ok => { if (ok) onOk(); });
     return;
   }
   unlockNoteDialog(n, () => {

@@ -492,7 +492,8 @@ function togglePin(id) {
 }
 function trashNote(id) {
   const n = noteById(id); if (!n || n.deleted) return true;
-  if (n.enc && !S.dec[n.id]) return false; // 未解密的加密便签禁止删除（须先解锁）
+  // 未解锁的加密便签禁止删除（须先解锁）；缺盐值的旧格式便签例外——它永远无法解锁，锁定保护毫无意义
+  if (n.enc && n.salt && !S.dec[n.id]) return false;
   n.deleted = true; n.deletedAt = Date.now();
   dbPut('notes', plainNote(n));
   return true;
@@ -505,7 +506,8 @@ function restoreNote(id) {
 async function purgeNote(id) {
   const i = S.notes.findIndex(n => n.id === id); if (i < 0) return true;
   const n = S.notes[i];
-  if (n.enc && !S.dec[n.id]) return false; // 未解密的加密便签禁止彻底删除（须先解锁）
+  // 同 trashNote：缺盐值的旧格式便签例外允许彻底删除
+  if (n.enc && n.salt && !S.dec[n.id]) return false;
   const idx = S.kv.syncIndex || {};
   if (idx[n.id]) {
     const pend = S.kv.pendingDeletes || [];
@@ -535,7 +537,7 @@ async function emptyTrash() {
 async function purgeExpiredTrash() {
   const limit = Date.now() - 30 * 86400e3;
   for (const n of S.notes.filter(n => n.deleted && n.deletedAt && n.deletedAt < limit)) {
-    if (n.enc && !S.dec[n.id]) continue; // 未解锁的加密便签不自动清除，永久保留在回收站
+    if (n.enc && n.salt && !S.dec[n.id]) continue; // 未解锁的加密便签不自动清除（缺盐值的旧格式便签可清除）
     await purgeNote(n.id);
   }
 }

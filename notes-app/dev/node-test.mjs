@@ -1336,7 +1336,19 @@ await t('排版：style 字段随 frontmatter 往返', async () => {
   assert(plain.style && plain.style.al === 'c', '内部记录保留排版字段');
 });
 
-/* ---- 1.8.0 分组共享密码 ---- */
+await t('1.8.1 删除闸口：缺盐值的旧格式加密便签可直接删除（无需也无法解锁）', async () => {
+  const f = C.createGroup('旧格式组');
+  const n = C.createNote(f.id).id;
+  await C.saveNoteContent(C.noteById(n), '旧便签正文');
+  assert(await C.setNotePassword(n, 'p12345'), '设密码');
+  const note = C.noteById(n);
+  note.salt = undefined; note.verifier = undefined; // 模拟文件夹加密时代的无盐文件
+  assert(C.trashNote(n) === true, '缺盐值便签可移入最近删除');
+  await C.purgeNote(n);
+  assert(!C.noteById(n), '缺盐值便签可彻底删除并已从本机移除');
+});
+
+/* ---- 1.8.0 分组共享密码 ---- *//* ---- 1.8.0 分组共享密码 ---- */
 let gpF = null, gpA = null, gpB = null, gpC = null;
 await t('分组密码：空分组拒绝设置', async () => {
   const fe = C.createGroup('空组');
