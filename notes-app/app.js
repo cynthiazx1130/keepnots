@@ -4,7 +4,7 @@
 'use strict';
 
 /* 应用版本：发版必改（「关于」页显示此值）；dev/build-apk.mjs 打包时会校验与 VER 一致 */
-const APP_VER = '1.8.1';
+const APP_VER = '1.9.0';
 
 /* ---------------- 多语言（设置 → 外观 可切换；默认跟随系统） ----------------
  * 机制：界面字符串以中文为源，EN_DICT 提供英文对照；t() 用于动态拼装的字符串，
@@ -50,6 +50,17 @@ const I18N_EN = {
   '标签：': 'Tags: ', '标签已清空': 'Tags cleared',
   '设置分组密码': 'Set Group Password', '更改分组密码': 'Change Group Password', '移除分组密码': 'Remove Group Password',
   '解锁分组…': 'Unlock Group…', '锁定分组': 'Lock Group', '转用分组密码': 'Use Group Password',
+  '设置分组密码…': 'Set Group Password…', '更改分组密码…': 'Change Group Password…', '移除分组密码': 'Remove Group Password',
+  '在网页上记录便签': 'Using KeepNots on the web',
+  '便签同步到你自己的坚果云，与手机端互通。先选择在这台电脑上的保存方式（随时可在设置里更改）：': 'Your notes sync to your own Jianguoyun cloud and interoperate with your phone. Choose how to store them on this computer (changeable anytime in Settings):',
+  '仅云同步': 'Cloud only', '本地 + 云同步': 'Local + Cloud',
+  '推荐：外部 / 公用电脑。便签只存在本浏览器与你自己的坚果云，不在电脑上落盘；公用电脑建议配合浏览器隐身窗口使用': 'Recommended for shared or temporary computers. Notes live in this browser and your own cloud only — nothing is written to disk. A private browser window is recommended on shared computers',
+  '推荐：私人电脑。便签以标准 .md 文件实时保存到你选的文件夹，同时同步到坚果云': 'Recommended for personal computers. Notes are saved in real time as standard .md files to a folder you pick, and synced to your cloud',
+  '清除这台电脑上的便签数据…': 'Wipe notes from this computer…', '清除这台电脑上的便签数据？': 'Wipe notes from this computer?',
+  '清除': 'Wipe',
+  '将清空本浏览器里的全部便签、配置与坚果云登录信息。云端与手机不受影响，下次使用重新配置即可恢复。此操作不可撤销。': 'This wipes all notes, settings and your cloud credentials from this browser. The cloud and your phone are not affected. Re-configure next time to pull everything back. This cannot be undone.',
+  '同时删除本地保存位置里应用写入的文件': 'Also delete the files the app wrote into the local folder',
+  ' 个：.md 便签、附件与配置文件；你自己放入的其他文件不动）': ' (.md notes, attachments and config files; your own files are untouched)',
   '删除这条便签？': 'Delete this note?',
   '它缺少加密元数据（旧格式文件），内容已无法恢复，删除后不可撤销。': 'It lacks encryption metadata (legacy format) and its content cannot be recovered. Deletion is irreversible.',
   '分组已解锁': 'Group unlocked', '分组已锁定': 'Group locked', '分组已加密': 'Group encrypted',
@@ -500,12 +511,72 @@ async function bkStop() {
   bkPaint();
   toast('已停用；文件夹中的 .md 文件保留在原处');
 }
+/* 1.9.0 设备数据清除：清空本应用的浏览器数据库（便签/配置/附件缓存/坚果云登录信息），
+ * 可选一并删除本地保存位置里应用写入的文件。云端与手机不受影响——下次使用重新配置即可全量拉回。
+ * 完成后强制重载页面（内存态一并归零）。 */
+async function wipeDeviceDataFlow() {
+  const hasBk = !!BK.dir;
+  let files = [];
+  if (hasBk) {
+    const set = new Set();
+    const idx = S.kv.syncIndex || {};
+    for (const k in idx) { const r = idx[k]; if (r && r.file) set.add((r.sub || '') + '/' + r.file); }
+    for (const name of await attAllNames()) set.add('attachments/' + name);
+    set.add('folders.json'); set.add('deleted.json');
+    for (const f of S.foldersDoc.folders) set.add(slugDirName(f.name) + '/' + UNLOCKER_NAME);
+    files = [...set];
+  }
+  const d = document.createElement('div'); d.className = 'm-body';
+  const t = document.createElement('div'); t.className = 'm-title'; t.textContent = zt('清除这台电脑上的便签数据？');
+  const msg = document.createElement('div'); msg.style.cssText = 'margin:8px 0';
+  msg.textContent = zt('将清空本浏览器里的全部便签、配置与坚果云登录信息。云端与手机不受影响，下次使用重新配置即可恢复。此操作不可撤销。');
+  d.appendChild(msg);
+  let ck = null;
+  if (hasBk && files.length) {
+    ck = document.createElement('label'); ck.style.cssText = 'display:flex;gap:8px;align-items:flex-start;margin:10px 0;cursor:pointer';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = true;
+    const ctext = document.createElement('span'); ctext.style.cssText = 'font-size:13.5px';
+    ctext.textContent = zt('同时删除本地保存位置里应用写入的文件') + '（' + files.length + ' 个：.md 便签、附件与配置文件；你自己放入的其他文件不动）';
+    ck.append(cb, ctext);
+    d.appendChild(ck);
+  }
+  const btns = document.createElement('div'); btns.className = 'm-btns';
+  const bc = document.createElement('button'); bc.className = 'btn'; bc.textContent = zt('取消');
+  const bo = document.createElement('button'); bo.className = 'btn btn-primary'; bo.textContent = zt('清除');
+  bo.style.cssText = 'background:#c0392b;border-color:#c0392b';
+  btns.append(bc, bo); d.appendChild(btns);
+  const h = showModal(d);
+  bc.onclick = () => h.close();
+  bo.onclick = async () => {
+    h.close();
+    if (hasBk && ck && ck.querySelector('input').checked) {
+      const port = fsPort(BK.dir);
+      for (const f of files) {
+        const i = f.indexOf('/');
+        try { await port.remove(i > 0 ? f.slice(0, i) : '', i > 0 ? f.slice(i + 1) : f); } catch (e) { /* 尽力清理 */ }
+      }
+    }
+    await wipeLocalDatabase();
+    try { localStorage.clear(); } catch (e) { /* 忽略 */ }
+    try { sessionStorage.clear(); } catch (e) { /* 忽略 */ }
+    location.reload();
+  };
+}
 function bkPaint(prefix) {
   const st = document.getElementById('bkState');
   if (!st) return;
+  const stopBtn = document.getElementById('btnStopBk');
+  if (stopBtn) stopBtn.hidden = !BK.dir;
   const EN = LANG() === 'en';
   if (!bkSupported()) { st.textContent = EN ? 'Not available here (needs Chrome / Edge or the KeepNots desktop app)' : '当前环境不支持（需 Chrome / Edge 或守心便签桌面版）'; return; }
-  if (!BK.dir) { st.textContent = EN ? 'Not set. Pick a folder and every note is saved there as standard .md files in real time (recommended).' : '未设置。选择文件夹后，所有便签会以 .md 格式实时保存在其中（推荐）。'; return; }
+  if (!BK.dir) {
+    if (S.kv.sync && siteAvailable()) { // 仅云同步模式（用户显式选择或配置了云同步但未启用本地文件夹）
+      st.textContent = EN ? 'Cloud-only mode: notes live in this browser and your own cloud drive. On shared computers, use Settings → Device data → wipe when done.' : '未使用本地保存（仅云同步模式）——便签保存在本浏览器与你自己的坚果云。公用电脑用完请在下方「设备数据」里清除本机数据。';
+      st.className = 'set-status ok';
+      return;
+    }
+    st.textContent = EN ? 'Not set. Pick a folder and every note is saved there as standard .md files in real time (recommended).' : '未设置。选择文件夹后，所有便签会以 .md 格式实时保存在其中（推荐）。'; return;
+  }
   const last = S.kv.backupAt ? (EN ? ', last write ' : '，上次写入 ') + fmtListDate(S.kv.backupAt) : '';
   const prefixEn = { '正在全量写入…': 'Writing all notes…', '正在写入…': 'Writing…' }[prefix] || prefix;
   const shown = EN ? (prefix || '') : (prefix || '');
@@ -589,6 +660,7 @@ async function mirrorAttachments() { // 保存位置开启时，attachments/ 目
 }
 async function saveWizard() {
   try {
+    if (siteAvailable()) return; // 网页版走统一首启引导（siteSyncWizard 三选一），不再单独弹保存位置向导
     if (S.kv.saveWizardDone || BK.dir || !bkSupported()) { if (!bkSupported()) await kvSet('saveWizardDone', 1); return; }
     const msg = androidFs()
       ? '把便签保存到手机存储的文件夹里（标准 Markdown 格式，卸载应用也不丢失）：随时可用文件管理器查看，也可拷贝到电脑。也可以先跳过，之后在 设置 → 本地保存位置 里开启。'
@@ -663,17 +735,35 @@ async function siteProbe() { // 启动迁移：曾配置本地代理的旧配置
     setTimeout(() => toast('坚果云同步已切换为网站中继（无需再运行本地代理）'), 800);
   }
 }
-/* 网页版首次引导：未配置云同步时提示三步接入坚果云（一次性，可跳过） */
+/* 网页版首次引导（1.9.0 三选一）：仅云同步（外部/公用电脑）／本地+云同步（私人电脑）／暂不。
+ * 一次性（kv 双标记）；之后随时可在设置里更改本地保存位置或清除本机数据。 */
 async function siteSyncWizard() {
   try {
     if (!siteAvailable() || S.kv.sync || S.kv.siteSyncWizardDone) return;
     await kvSet('siteSyncWizardDone', 1);
-    const go = await showConfirm({
-      title: '在网页上记录便签',
-      message: '网页版把便签存到你自己的坚果云，本浏览器会记住配置，无需注册本站账户。共三步：登录坚果云网页版 → 账户信息 → 安全选项 → 添加授权密码；然后点「去设置」填入注册邮箱与授权密码即可。',
-      okText: '去设置', cancelText: '暂不',
+    await kvSet('saveWizardDone', 1); // 统一引导取代旧的保存位置向导
+    const d = document.createElement('div'); d.className = 'm-body';
+    const t = document.createElement('div'); t.className = 'm-title'; t.textContent = '在网页上记录便签';
+    d.appendChild(t);
+    const hint = document.createElement('div'); hint.className = 'm-hint';
+    hint.textContent = '便签同步到你自己的坚果云，与手机端互通。先选择在这台电脑上的保存方式（随时可在设置里更改）：';
+    d.appendChild(hint);
+    const mk = (label, sub, fn) => {
+      const b = document.createElement('button'); b.className = 'btn'; b.style.cssText = 'display:block;width:100%;margin-top:10px;text-align:left';
+      b.textContent = label;
+      if (sub) { const s2 = document.createElement('div'); s2.className = 'm-hint'; s2.style.margin = '0'; s2.textContent = sub; b.appendChild(s2); }
+      b.onclick = () => { h.close(); fn(); };
+      d.appendChild(b);
+    };
+    mk('仅云同步', '推荐：外部 / 公用电脑。便签只存在本浏览器与你自己的坚果云，不在电脑上落盘；公用电脑建议配合浏览器隐身窗口使用', async () => {
+      openSettings('sync');
     });
-    if (go) openSettings('sync');
+    mk('本地 + 云同步', '推荐：私人电脑。便签以标准 .md 文件实时保存到你选的文件夹，同时同步到坚果云', async () => {
+      await bkPickDir();
+      openSettings('sync');
+    });
+    mk('暂不', '先离线记事，之后再配置', () => {});
+    const h = showModal(d);
   } catch (e) { /* 忽略 */ }
 }
 /* 网站账户体系已下线（2026-09-22）：网页版免登录直用，坚果云凭证存浏览器本地。
@@ -3250,7 +3340,13 @@ function openSettings(focusSection) {
         <button class="btn" id="btnImportNotes">导入</button>
         <button class="btn" id="btnExportNotes">导出</button>
       </div>
-      <div class="m-hint">设置文件夹后，所有便签会以标准 .md 实时保存在其中（主存储；换电脑拷走整个文件夹，再点「本地目录」选中即可恢复）。「导入」把所选文件夹里的便签读回应用：新便签直接导入，同名便签只在其较新时覆盖，绝不删除本机已有便签。「导出」可勾选任意便签（支持全选）导出为 .md 文件；加密便签会先要求输入密码解密后导出明文。需 Chrome / Edge 或桌面版。</div>
+      <button class="btn" id="btnStopBk" hidden style="margin-top:8px">停用本地保存位置</button>
+      <div class="m-hint">设置文件夹后，所有便签会以标准 .md 实时保存在其中（主存储；换电脑拷走整个文件夹，再点「本地目录」选中即可恢复）。停用后文件夹里已写入的 .md 文件原样保留。「导入」把所选文件夹里的便签读回应用：新便签直接导入，同名便签只在其较新时覆盖，绝不删除本机已有便签。「导出」可勾选任意便签（支持全选）导出为 .md 文件；加密便签会先要求输入密码解密后导出明文。需 Chrome / Edge 或桌面版。</div>
+    </div>
+    <div class="set-sec">
+      <div class="set-h">设备数据</div>
+      <div class="m-hint">便签数据保存在本浏览器中，并同步到你自己的坚果云。在公用或外部电脑上用完后，可在此清除这台电脑上的全部便签数据（含坚果云登录信息）——云端与手机不受影响，下次使用重新配置即可。</div>
+      <div class="set-btns"><button class="btn" id="btnWipeDevice">清除这台电脑上的便签数据…</button></div>
     </div>
     <div class="set-sec">
       <div class="set-h">关于</div>
@@ -3316,8 +3412,10 @@ function openSettings(focusSection) {
   paintPace();
   // 本地保存位置（主存储）+ 导入/导出笔记
   $('#btnPickBkDir').onclick = bkPickDir;
+  $('#btnStopBk').onclick = bkStop;
   $('#btnImportNotes').onclick = importNotesFromFolder;
   $('#btnExportNotes').onclick = exportNotesDialog;
+  $('#btnWipeDevice').onclick = wipeDeviceDataFlow;
   bkPaint();
   // 主题分段控件
   const segLang = $('#segLang');

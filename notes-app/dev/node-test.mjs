@@ -60,7 +60,7 @@ vm.runInThisContext(readFileSync(path.join(root, 'core.js'), 'utf8'), { filename
   gdCompleteAuth, gdRevoke, unlockerHtml, TRASH_SUB, slugDirName, noteSubOf,
   displayTitleOf, displayName, renameFolder, UNLOCKER_NAME, UIHooks, FolderStore,
   attPut, attGet, attDel, attAllNames, attIsEnc, attSeal, attOpen, plainNote,
-  setGroupPassword, unlockGroup, lockGroup, changeGroupPassword, removeGroupPassword, groupEncSaltOf,
+  setGroupPassword, unlockGroup, lockGroup, changeGroupPassword, removeGroupPassword, groupEncSaltOf, wipeLocalDatabase, dbAll,
 })`);
 
 /* ---------- 断言 ---------- */
@@ -1402,6 +1402,14 @@ await t('分组密码：独立密码便签例外保留；更改组密码；移�
   assert(C.noteById(d).enc, '独立密码便签不受影响');
 });
 
+await t('1.9.0 设备数据清除：wipeLocalDatabase 清空全部存储（云端不受影响的语义由调用方保证）', async () => {
+  const f = C.createGroup('清除测试');
+  const n = C.createNote(f.id).id;
+  await C.saveNoteContent(C.noteById(n), '将被清除');
+  await C.wipeLocalDatabase();
+  assertEq((await C.dbAll('notes')).length, 0, 'notes 已清空');
+  assertEq((await C.dbAll('kv')).length, 0, 'kv 已清空');
+});
 /* ---- 汇总 ---- */
 console.log('\n守心便签 core.js 逻辑测试');
 console.log(results.join('\n'));

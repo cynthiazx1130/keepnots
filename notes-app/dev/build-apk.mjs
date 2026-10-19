@@ -27,7 +27,7 @@ const KEYTOOL = path.join(TOOLS, 'jdk8u504-b01/bin/keytool.exe');
 const JAVA = path.join(TOOLS, 'jdk8u504-b01/bin/java.exe');
 const BT = path.join(TOOLS, 'bt/android-9');
 const ANDROID_JAR = path.join(TOOLS, 'platform/android-9/android.jar');
-const VER = '1.8.1';
+const VER = '1.9.0';
 const JAVA_ENV = Object.assign({}, process.env, { PATH: path.join(TOOLS, 'jdk8u504-b01/bin') + path.delimiter + process.env.PATH });
 
 const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, Object.assign({ stdio: ['ignore', 'pipe', 'pipe'], shell: false }, opts));

@@ -106,6 +106,11 @@ const dbDel   = (s, k) => dbReq(s, 'readwrite', os => os.delete(k));
 const dbAll   = (s)    => dbReq(s, 'readonly',  os => os.getAll());
 const dbClear = (s)    => dbReq(s, 'readwrite', os => os.clear());
 const dbKvPut = (k, v) => dbReq('kv', 'readwrite', os => os.put(v, k));
+/* 1.9.0 设备数据清除：清空本应用 IndexedDB 全部存储（便签/分组/配置/附件缓存）。
+ * 只动本机——云端与手机不受影响；调用方负责 UI 确认与本地文件夹文件的可选清理。 */
+async function wipeLocalDatabase() {
+  await dbClear('notes'); await dbClear('folders'); await dbClear('kv'); await dbClear('atts');
+}
 
 /* ---------------- 附件（图片等） ----------------
  * 本机索引：IndexedDB atts 存储（键=文件名，值=Blob 或加密封装 ArrayBuffer）；
@@ -2183,5 +2188,5 @@ async function applyRemoteToNote(local, pf, e, fname, idx, sub) {
 const UIHooks = { editorFocused: () => false, extraFile: null };
 
 /* 导出给 app.js / 测试 */
-window.Z = { S, dav, gdav, syncNow, mergeFolders, parseNoteFile, noteToFile, renderMarkdown, noteTitle, noteSnippet, slugFile, gdAuthorize, gdCompleteAuth, gdRevoke, unlockerHtml, TRASH_SUB, UNGROUPED_SUB, slugDirName, noteSubOf, displayTitleOf, renameFolder, UNLOCKER_NAME, UIHooks, FolderStore, attPut, attGet, attAllNames, attIsEnc, attSeal, attOpen, setGroupPassword, unlockGroup, lockGroup, changeGroupPassword, removeGroupPassword, groupEncSaltOf,
+window.Z = { S, dav, gdav, syncNow, mergeFolders, parseNoteFile, noteToFile, renderMarkdown, noteTitle, noteSnippet, slugFile, gdAuthorize, gdCompleteAuth, gdRevoke, unlockerHtml, TRASH_SUB, UNGROUPED_SUB, slugDirName, noteSubOf, displayTitleOf, renameFolder, UNLOCKER_NAME, UIHooks, FolderStore, attPut, attGet, attAllNames, attIsEnc, attSeal, attOpen, setGroupPassword, unlockGroup, lockGroup, changeGroupPassword, removeGroupPassword, groupEncSaltOf, wipeLocalDatabase,
   createGroup, deleteGroup, setNoteGroup, setNotePassword, changeNotePassword, removeNotePassword, unlockNote, lockNote, verifyNotePassword, migrateFolderCrypto, plainNote, ensureDefaults, loadAll, createNote, saveNoteContent, kvSet, folderById, noteById, plainTextOf, displayName, cacheTitle, trashNote, restoreNote, purgeNote, emptyTrash, LEGACY_SUBS, LEGACY_TRASH_SUB, applyFoldersDoc, dbPut, randB64 };

@@ -27,7 +27,7 @@ const JDK17 = path.join(TOOLS, 'jdk17-tmp/jdk-17.0.20.1+1');
 const BT36 = path.join(TOOLS, 'bt36/android-16');
 const ANDROID_JAR36 = path.join(TOOLS, 'platform36/android-36-ext19/android.jar');
 const BUNDLETOOL = path.join(TOOLS, 'downloads/bundletool-all.jar');
-const VER = '1.8.1';
+const VER = '1.9.0';
 const JAVA_ENV = Object.assign({}, process.env, { PATH: path.join(JDK17, 'bin') + path.delimiter + process.env.PATH });
 const KS_ALIAS = 'znotes-upload';
 /* 上传密钥口令不进代码库：读环境变量 ZNOTES_KS_PASS，或 android/keystore-pass.local（gitignored）。

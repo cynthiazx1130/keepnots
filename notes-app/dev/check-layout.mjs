@@ -46,15 +46,15 @@ try {
   await sleep(1500);
 
   /* 0. 关闭首次启动的引导弹窗（保存位置向导、网页版同步指引等，可能叠加多个） */
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 24; i++) { // 向导在 init 完成后 400ms 才弹，页面加载慢时会晚到：最长等 6 秒
     const closed = await evalJs(`(() => {
       const bodies = [...document.querySelectorAll('#modalRoot .m-body')];
-      const wiz = bodies.reverse().find(b => [...b.querySelectorAll('button')].some(x => x.textContent === '暂不'));
+      const wiz = bodies.reverse().find(b => [...b.querySelectorAll('button')].some(x => x.textContent.indexOf('暂不') >= 0));
       if (!wiz) return false;
-      [...wiz.querySelectorAll('button')].find(x => x.textContent === '暂不').click();
+      [...wiz.querySelectorAll('button')].find(x => x.textContent.indexOf('暂不') >= 0).click();
       return true;
     })()`);
-    if (!closed) break;
+    if (!closed) { await sleep(250); continue; } // 向导晚到：轮询等待出现后再关闭
     await sleep(400);
   }
   await sleep(300);

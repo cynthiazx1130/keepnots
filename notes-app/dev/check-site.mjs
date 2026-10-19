@@ -73,7 +73,8 @@ try {
         if (!bds.length) return 0;
         const top = bds[bds.length - 1];
         const t = top.querySelector('.m-title');
-        const btn = top.querySelector('.m-btns .btn');
+        // 首启三选一向导的「暂不」按钮直接挂在 .m-body 下（无 .m-btns 容器），优先精确点它
+        const btn = [...top.querySelectorAll('button')].find(b => b.textContent.indexOf('暂不') >= 0) || top.querySelector('.m-btns .btn');
         if (!btn) return -1;
         const title = t ? t.textContent : '';
         btn.click();
