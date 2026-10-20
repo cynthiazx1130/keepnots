@@ -4,7 +4,7 @@
 'use strict';
 
 /* 应用版本：发版必改（「关于」页显示此值）；dev/build-apk.mjs 打包时会校验与 VER 一致 */
-const APP_VER = '1.9.0';
+const APP_VER = '1.9.1';
 
 /* ---------------- 多语言（设置 → 外观 可切换；默认跟随系统） ----------------
  * 机制：界面字符串以中文为源，EN_DICT 提供英文对照；t() 用于动态拼装的字符串，
@@ -2642,6 +2642,69 @@ async function resolveImgTags(container, note) {
 }
 function resolveNoteImages(note) { return resolveImgTags(elPreview, note); }
 
+/* ---------------- 复制出站：带序号的纯文本（1.9.1） ----------------
+ * 浏览器把 <ol>/<li> 合成为纯文本时丢弃序号（序号只是 CSS 标记），粘贴到记事本/微信等
+ * 纯文本目标就没有编号。copy 事件里合成带序号的 text/plain；text/html 不拦——
+ * 粘贴到 Word 等富文本目标仍保留列表样式。 */
+function inlineTextOf(node) {
+  let t = '';
+  node.childNodes.forEach(ch => {
+    if (ch.nodeType === 3) t += ch.nodeValue.replace(/\u00a0/g, ' ');
+    else if (ch.tagName === 'BR') t += '\n';
+    else t += inlineTextOf(ch);
+  });
+  return t;
+}
+function listLinesOf(listEl, indent, out) {
+  const ordered = listEl.tagName === 'OL';
+  let n = parseInt(listEl.getAttribute('start') || '1', 10) || 1;
+  for (const li of listEl.children) {
+    if (li.tagName !== 'LI') continue;
+    const clone = li.cloneNode(true);
+    const nested = [];
+    clone.querySelectorAll('ul,ol').forEach(x => { nested.push(x); x.remove(); });
+    let body = inlineTextOf(clone).replace(/\s+$/, '');
+    if (li.classList.contains('task')) {
+      const cb = li.querySelector('input[type=checkbox]');
+      body = ((cb && cb.checked) ? '[x] ' : '[ ] ') + body;
+    }
+    const mark = li.classList.contains('task') ? '- ' : (ordered ? n + '. ' : '- ');
+    const parts = (mark + body).split('\n');
+    out.push(indent + parts[0]);
+    for (let i = 1; i < parts.length; i++) out.push(indent + '    ' + parts[i]);
+    for (const nx of nested) listLinesOf(nx, indent + '    ', out);
+    if (ordered) n++;
+  }
+}
+function selPlainWithLists(rootEl) {
+  const out = [];
+  const walkBlocks = el => {
+    el.childNodes.forEach(node => {
+      if (node.nodeType === 3) { const t = node.textContent.replace(/\u00a0/g, ' ').trim(); if (t) out.push(t); return; }
+      if (node.nodeType !== 1) return;
+      const tag = node.tagName;
+      if (tag === 'UL' || tag === 'OL') { listLinesOf(node, '', out); return; }
+      if (/^(P|DIV)$/.test(tag) || /^H[1-3]$/.test(tag)) {
+        const t = inlineTextOf(node).replace(/\s+$/, '');
+        if (t) { const parts = t.split('\n'); out.push(parts[0]); for (let i = 1; i < parts.length; i++) out.push(parts[i]); }
+      } else if (tag === 'BLOCKQUOTE') {
+        const t = inlineTextOf(node).replace(/\s+$/, '');
+        if (t) out.push(t);
+      } else if (tag === 'PRE') {
+        for (const l of node.textContent.replace(/\n$/, '').split('\n')) out.push('    ' + l);
+      } else if (tag === 'HR') {
+        out.push('————————');
+      } else if (tag === 'IMG') {
+        out.push('[图片]');
+      } else {
+        walkBlocks(node);
+      }
+    });
+  };
+  walkBlocks(rootEl);
+  return out.join('\n');
+}
+
 /* ---------------- 富文本编辑（所见即所得） ----------------
  * contenteditable 呈现渲染结果，输入时把 DOM 序列化回 Markdown 存储；
  * 只在进入/离开模式时切换，输入过程不重渲染（不跳光标，兼容中文输入法）。 */
@@ -2977,6 +3040,41 @@ function showImgPanel(img) {
     mk('中', () => { cur.al = 'c'; apply(); }, '居中'),
     mk('右', () => { cur.al = 'r'; apply(); }, '右对齐'),
     mk('原始', () => { cur.w = ''; cur.al = 'l'; apply(); }, '恢复原始大小'),
+    mk('保存…', async () => {
+      let blob = null;
+      try { const r = await fetch(img.src); blob = await r.blob(); } catch (e) { /* 忽略 */ }
+      if (!blob) { toast('图片数据不可用'); return; }
+      const ext = (blob.type && blob.type.indexOf('png') >= 0) ? 'png' : ((blob.type && blob.type.indexOf('jpeg') >= 0) ? 'jpg' : 'png');
+      const name = 'img-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.' + ext;
+      if (window.showSaveFilePicker) {
+        try {
+          const accept = {}; accept[blob.type || 'image/png'] = ['.' + ext];
+          const fh = await showSaveFilePicker({ suggestedName: name, types: [{ description: '图片', accept }] });
+          const w = await fh.createWritable(); await w.write(blob); await w.close();
+          toast('图片已保存');
+          return;
+        } catch (e) { if (e && e.name === 'AbortError') return; }
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      toast('图片已开始下载');
+    }, '把这张图片保存为文件'),
+    mk('复制', async () => {
+      let blob = null;
+      try { const r = await fetch(img.src); blob = await r.blob(); } catch (e) { /* 忽略 */ }
+      if (!blob) { toast('图片数据不可用'); return; }
+      try {
+        if (blob.type !== 'image/png') { // 剪贴板写入稳定支持的只有 PNG：先转码
+          const bmp = await createImageBitmap(blob);
+          const cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height;
+          cv.getContext('2d').drawImage(bmp, 0, 0);
+          blob = await new Promise(res => cv.toBlob(res, 'image/png'));
+        }
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        toast('图片已复制到剪贴板');
+      } catch (e) { toast('复制失败：' + (e.message || e)); }
+    }, '复制图片到剪贴板（可粘贴到聊天或文档）'),
   );
   document.body.appendChild(p);
   const r = img.getBoundingClientRect();
@@ -3827,6 +3925,24 @@ function bindEvents() {
     e.preventDefault();
     if (!m[3].trim()) replaceRange(ta, ls, lineEnd, m[1]); // 空清单项 → 去掉标记退出
     else replaceRange(ta, pos, pos, '\n' + m[1] + m[2] + ' [ ] '); // 延续下一项（未勾选）
+  });
+  // 复制出站：便签内容选区 → 合成带序号的纯文本（text/plain），富文本 flavor 交浏览器默认
+  document.addEventListener('copy', e => {
+    const sel = getSelection();
+    if (!sel.rangeCount || sel.isCollapsed || !e.clipboardData) return;
+    const anc = sel.anchorNode;
+    const el = anc && (anc.nodeType === 1 ? anc : anc.parentElement);
+    if (!el || !el.closest('.md-body')) return; // 只拦便签内容区（编辑/阅读视图）
+    const r = sel.getRangeAt(0);
+    const holder = document.createElement('div');
+    holder.appendChild(r.cloneContents());
+    const text = selPlainWithLists(holder);
+    if (text) {
+      e.preventDefault();
+      e.clipboardData.setData('text/plain', text);
+      const html = '<div>' + holder.innerHTML + '</div>';
+      e.clipboardData.setData('text/html', html);
+    }
   });
   ta.addEventListener('paste', e => {
     const files = [...((e.clipboardData || {}).items || [])].filter(i => i.kind === 'file' && /^image\//.test(i.type)).map(i => i.getAsFile()).filter(Boolean);

@@ -746,6 +746,23 @@ try {
   assert(img.ok, '分享长图渲染（base64 非空） ' + JSON.stringify(img));
   assert(img.h >= 100 && img.h <= 900, '分享长图底部裁切：高度贴合内容（无长条空白） h=' + img.h);
 
+  /* 9q. 1.9.1 复制出站：有序列表的纯文本合成带序号；图片面板含保存/复制入口 */
+  const copyOut = await evalJs(`(() => {
+    const holder = document.createElement('div');
+    holder.innerHTML = '<ol start="2"><li>甲</li><li>乙</li></ol><p>尾段</p><ul><li class="task"><input type="checkbox" checked><span>已完成</span></li></ul>';
+    return selPlainWithLists(holder);
+  })()`);
+  assert(copyOut.indexOf('2. 甲') >= 0 && copyOut.indexOf('3. 乙') >= 0 && copyOut.indexOf('尾段') >= 0 && copyOut.indexOf('- [x] 已完成') >= 0, '复制出站：有序列表纯文本带序号（含 start 偏移与任务清单） ' + JSON.stringify(copyOut));
+  const imgBtns = await evalJs(`(() => {
+    const img = document.createElement('img'); img.src = 'data:image/png;base64,iVBORw0KGgo=';
+    document.body.appendChild(img);
+    showImgPanel(img);
+    const names = [...document.querySelectorAll('.img-panel button')].map(b => b.textContent);
+    const panel = document.querySelector('.img-panel'); if (panel) panel.remove(); img.remove();
+    return names;
+  })()`);
+  assert(imgBtns.includes('保存…') && imgBtns.includes('复制'), '图片面板含保存/复制入口 ' + JSON.stringify(imgBtns));
+
   console.log('桌面布局验证:');
   console.log(results.join('\n'));
   const failed = results.filter(r => r.startsWith('  ✕')).length;
