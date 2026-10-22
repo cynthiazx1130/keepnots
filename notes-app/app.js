@@ -4,7 +4,7 @@
 'use strict';
 
 /* 应用版本：发版必改（「关于」页显示此值）；dev/build-apk.mjs 打包时会校验与 VER 一致 */
-const APP_VER = '1.9.2';
+const APP_VER = '1.9.3';
 
 /* ---------------- 多语言（设置 → 外观 可切换；默认跟随系统） ----------------
  * 机制：界面字符串以中文为源，EN_DICT 提供英文对照；t() 用于动态拼装的字符串，
@@ -51,6 +51,7 @@ const I18N_EN = {
   '设置分组密码': 'Set Group Password', '更改分组密码': 'Change Group Password', '移除分组密码': 'Remove Group Password',
   '解锁分组…': 'Unlock Group…', '锁定分组': 'Lock Group', '转用分组密码': 'Use Group Password',
   '设置分组密码…': 'Set Group Password…', '更改分组密码…': 'Change Group Password…', '移除分组密码': 'Remove Group Password',
+  '复制全文': 'Copy All', '已复制全文（列表/序号保留）': 'Copied (lists and numbering kept)', '加密便签请先解锁后再复制': 'Unlock the note before copying',
   '在网页上记录便签': 'Using KeepNots on the web',
   '便签同步到你自己的坚果云，与手机端互通。先选择在这台电脑上的保存方式（随时可在设置里更改）：': 'Your notes sync to your own Jianguoyun cloud and interoperate with your phone. Choose how to store them on this computer (changeable anytime in Settings):',
   '仅云同步': 'Cloud only', '本地 + 云同步': 'Local + Cloud',
@@ -1826,6 +1827,7 @@ function noteMenuItems(n) {
   const items = [
     { label: n.pinned ? '取消置顶' : '置顶', fn: () => { togglePin(n.id); if (S.noteId === n.id) renderEditor(); renderSidebar(); renderList(); scheduleSync(); } },
     { label: '分组与标签…', fn: () => groupTagsDialog(n) },
+    { label: '复制全文', fn: () => copyNotePlainText(n) },
   ];
   if (androidFs()) items.push({ label: '分享…', fn: () => shareNoteDialog(n) });
   // 加密入口：分组共享密码（组内便签共用一组密，新便签入组自动加密）+ 独立便签密码（例外保留）
@@ -2045,6 +2047,33 @@ async function renderNoteImage(n) {
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
   });
   return url.split(',')[1] || '';
+}
+/* 裁掉画布底部空白，返回 PNG dataURL 的 base64：
+ * 手机 WebView 的页面文字缩放/字体放大会让 DOM 测量比 SVG 栅格化偏高（SVG 图片不受页面缩放），
+ * 底部于是多出一条空白。逐条扫描像素找最后一行内容，只保留 内容+底边距——无论度量怎么漂移都自愈。 */
+/* 1.9.3 复制全文（含序号）：不依赖 copy 事件的可靠复制——手机 WebView 的系统选择工具栏
+ * 复制不一定触发网页 copy 事件；显式把整篇便签（列表/序号完整保留）写入剪贴板。 */
+function legacyCopyText(text) {
+  const tmp = document.createElement('textarea');
+  tmp.value = text;
+  tmp.style.cssText = 'position:fixed;left:-9999px;top:0';
+  document.body.appendChild(tmp);
+  tmp.focus(); tmp.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  tmp.remove();
+  return ok;
+}
+function copyNotePlainText(n) {
+  if (n.enc && !S.dec[n.id]) { toast('加密便签请先解锁后再复制'); return; }
+  let root = S.preview ? elPreview : elWys;
+  if (!root || !root.childNodes.length) root = (root === elPreview) ? elWys : elPreview;
+  const text = (root && root.childNodes.length) ? selPlainWithLists(root) : (plainTextOf(n) || '');
+  const done = () => toast('已复制全文（列表/序号保留）');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => { if (legacyCopyText(text)) done(); else toast('复制失败'); });
+  } else if (legacyCopyText(text)) done();
+  else toast('复制失败');
 }
 /* 裁掉画布底部空白，返回 PNG dataURL 的 base64：
  * 手机 WebView 的页面文字缩放/字体放大会让 DOM 测量比 SVG 栅格化偏高（SVG 图片不受页面缩放），
