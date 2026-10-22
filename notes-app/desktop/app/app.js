@@ -4,7 +4,7 @@
 'use strict';
 
 /* 应用版本：发版必改（「关于」页显示此值）；dev/build-apk.mjs 打包时会校验与 VER 一致 */
-const APP_VER = '1.9.1';
+const APP_VER = '1.9.2';
 
 /* ---------------- 多语言（设置 → 外观 可切换；默认跟随系统） ----------------
  * 机制：界面字符串以中文为源，EN_DICT 提供英文对照；t() 用于动态拼装的字符串，
@@ -1533,8 +1533,11 @@ async function doSync(manual) {
   return r;
 }
 function updateSyncState() {
-  const bSync = $('#btnSyncNow');
-  if (bSync) bSync.classList.toggle('spin', !!S.syncing);
+  // 同步进行中：侧栏/列表页/编辑器三个同步按钮全部旋转（移动端主要可见反馈）
+  for (const id of ['btnSyncNow', 'btnSyncTop', 'btnSyncEd']) {
+    const b = document.getElementById(id);
+    if (b) b.classList.toggle('spin', !!S.syncing);
+  }
   const EN = LANG() === 'en';
   if (S.syncing) { elSyncState.textContent = EN ? 'Syncing…' : '同步中…'; elSyncState.className = 'sync-state busy'; return; }
   if (!syncReady()) { elSyncState.textContent = EN ? 'Cloud sync not set up' : '未配置云同步'; elSyncState.className = 'sync-state'; return; }
@@ -1948,73 +1951,100 @@ function saveNoteToGallery(n) {
  *   边框盒比画布宽出 padding 被裁掉；②底部大片空白——旧实现挂 md-body 类，应用样式表（手机端 min-height 等）
  *   污染高度测量，且测量样式与栅格化样式不一致。现改为：专用类不带任何应用样式，同一份 css 注入页面测量、
  *   注入 SVG 栅格化，测得多少画多少。 */
-function renderNoteImage(n) {
-  return new Promise((resolve, reject) => {
-    try {
-      const W = Math.max(280, Math.min(window.innerWidth || 360, 720));
-      const PAD = 28;
-      const lhImg = 1.6;                       // 分享图固定行距
-      const cssRules = [
-        '*{box-sizing:border-box;margin:0;padding:0}',
-        'h1{font-size:26px;font-weight:700;margin:14px 0 6px}', 'h2{font-size:21px;font-weight:700;margin:14px 0 5px}',
-        'h3{font-size:17.5px;font-weight:600;margin:12px 0 4px}', 'p{margin:1.2em 0}', 'ul,ol{margin:7px 0;padding-left:24px}',
-        'li{margin:3.5px 0}', 'li.task{list-style:none;margin-left:-24px}', 'li.task input{width:15px;height:15px;vertical-align:middle;margin-right:8px}',
-        'blockquote{border-left:3px solid #ddd6c4;color:#5a5342;padding:2px 0 2px 12px;margin:8px 0}',
-        'code{background:#f1ecdd;border-radius:4px;padding:1px 5px;font-family:monospace;font-size:.92em}',
-        'pre{background:#f4efe2;border-radius:8px;padding:12px;overflow:hidden;white-space:pre-wrap}',
-        'pre code{background:none;padding:0}', 'hr{border:0;border-top:1px solid #ddd6c4;margin:16px 0}',
-        'img{max-width:100%}', 'a{color:#8a6d1f}',
-      ];
-      const css = cssRules.join('');
-      // 根元素关键样式走内联（CSSOM 不受 CSP 限制，序列化后 SVG 里同样生效，测量/栅格化天然一致）
-      const elStyle = 'width:' + W + 'px;box-sizing:border-box;background-color:#fffdf8;color:#26221a;padding:' + PAD + 'px;font-size:17px;line-height:' + lhImg;
-      // 测量：子元素规则（p/li 边距等）走 CSSOM insertRule——页面 CSP 禁 <style> 元素；
-      // 插入/删除在同一个同步任务里完成，中途不发生渲染。手机端若度量仍有偏差，由后续像素裁切兜底。
-      const holder = document.createElement('div');
-      holder.style.cssText = 'position:fixed;left:-99999px;top:0';
-      const el = document.createElement('div');
-      el.className = 'zshare'; // 不用 md-body：应用样式表会污染测量（min-height 等）
-      el.style.cssText = elStyle;
-      el.innerHTML = renderMarkdown(plainTextOf(n) || '');
-      holder.appendChild(el);
-      const sheet = document.styleSheets && document.styleSheets[0];
-      let H;
-      if (sheet && sheet.insertRule) {
-        const start = sheet.cssRules.length;
-        for (const r of cssRules) sheet.insertRule(r, sheet.cssRules.length);
-        document.body.appendChild(holder);
-        H = Math.max(120, Math.min(Math.ceil(el.getBoundingClientRect().height), 20000));
-        document.body.removeChild(holder);
-        for (let i = sheet.cssRules.length - 1; i >= start; i--) sheet.deleteRule(i);
-      } else {
-        document.body.appendChild(holder);
-        H = Math.max(120, Math.min(el.scrollHeight + PAD * 2, 20000));
-        document.body.removeChild(holder);
-      }
-      const xhtml = new XMLSerializer().serializeToString(el);
-      const scale = W * H <= 1440 * 4000 ? 2 : 1; // 2x 超采样（清晰度）；过大回落 1x 防老设备画布超限
-      const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '">' +
-        '<foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">' +
-        '<style>' + css + '</style>' + xhtml +
-        '</div></foreignObject></svg>';
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const cv = document.createElement('canvas');
-          cv.width = W * scale; cv.height = H * scale;
-          const ctx = cv.getContext('2d');
-          ctx.scale(scale, scale);
-          ctx.fillStyle = '#fffdf8';
-          ctx.fillRect(0, 0, W, H);
-          ctx.drawImage(img, 0, 0);
-          const url = trimCanvasBottom(cv, Math.round(PAD * scale));
-          resolve(url.split(',')[1] || '');
-        } catch (e) { reject(e); }
-      };
-      img.onerror = () => reject(new Error('render'));
-      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-    } catch (e) { reject(e); }
+async function renderNoteImage(n) {
+  const W = Math.max(280, Math.min(window.innerWidth || 360, 720));
+  const PAD = 28;
+  const lhImg = 1.6;                       // 分享图固定行距
+  const cssRules = [
+    '*{box-sizing:border-box;margin:0;padding:0}',
+    'h1{font-size:26px;font-weight:700;margin:14px 0 6px}', 'h2{font-size:21px;font-weight:700;margin:14px 0 5px}',
+    'h3{font-size:17.5px;font-weight:600;margin:12px 0 4px}', 'p{margin:1.2em 0}', 'ul,ol{margin:7px 0;padding-left:24px}',
+    'li{margin:3.5px 0}', 'li.task{list-style:none;margin-left:-24px}', 'li.task input{width:15px;height:15px;vertical-align:middle;margin-right:8px}',
+    'blockquote{border-left:3px solid #ddd6c4;color:#5a5342;padding:2px 0 2px 12px;margin:8px 0}',
+    'code{background:#f1ecdd;border-radius:4px;padding:1px 5px;font-family:monospace;font-size:.92em}',
+    'pre{background:#f4efe2;border-radius:8px;padding:12px;overflow:hidden;white-space:pre-wrap}',
+    'pre code{background:none;padding:0}', 'hr{border:0;border-top:1px solid #ddd6c4;margin:16px 0}',
+    'img{max-width:100%}', 'a{color:#8a6d1f}',
+  ];
+  const css = cssRules.join('');
+  // 根元素关键样式走内联（CSSOM 不受 CSP 限制，序列化后 SVG 里同样生效，测量/栅格化天然一致）
+  const elStyle = 'width:' + W + 'px;box-sizing:border-box;background-color:#fffdf8;color:#26221a;padding:' + PAD + 'px;font-size:17px;line-height:' + lhImg;
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed;left:-99999px;top:0';
+  const el = document.createElement('div');
+  el.className = 'zshare'; // 不用 md-body：应用样式表会污染测量（min-height 等）
+  el.style.cssText = elStyle;
+  el.innerHTML = renderMarkdown(plainTextOf(n) || '');
+  holder.appendChild(el);
+
+  /* 1.9.2 图片内联：SVG-in-img 管线只加载数据 URL（blob/外链一律不加载，图片会全部丢失）——
+   * 把每张图片读成 blob 转 dataURL 内嵌；加载不了的以占位条呈现。
+   * 宽高/对齐样式由 renderMarkdown 的内联 style 携带，这里只需换 src 并去掉 loading="lazy"
+   * （离屏永不触发懒加载，lazy 图会永远 empty）。 */
+  for (const im of [...el.querySelectorAll('img')]) {
+    const path = im.dataset.zatt || im.getAttribute('src') || '';
+    let blob = null;
+    if (path) { try { blob = await attLoadBlob(path, n); } catch (e) { /* 忽略 */ } }
+    if (!blob && /^(https?:|blob:|data:)/i.test(path)) {
+      try { const r = await fetch(path); blob = await r.blob(); } catch (e) { /* 忽略 */ }
+    }
+    const ph = document.createElement('span');
+    ph.textContent = '［图片］';
+    ph.style.cssText = 'display:inline-block;padding:4px 10px;border:1px solid #ddd6c4;border-radius:6px;color:#8a8578;font-size:13px';
+    if (!blob) { im.replaceWith(ph); continue; }
+    const dataUrl = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => res(null); fr.readAsDataURL(blob); });
+    if (!dataUrl) { im.replaceWith(ph); continue; }
+    im.setAttribute('src', dataUrl);
+    im.removeAttribute('data-zatt');
+    im.removeAttribute('loading');
+  }
+  // 等 dataURL 图片解码完成（轮询兜底不支持 decode() 的老内核）
+  for (let i = 0; i < 40; i++) {
+    const pend = [...el.querySelectorAll('img')].filter(im => (im.getAttribute('src') || '').indexOf('data:') === 0 && !im.complete);
+    if (!pend.length) break;
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  // 测量：子元素规则（p/li 边距等）走 CSSOM insertRule——页面 CSP 禁 <style> 元素；
+  // 插入/删除在同一个同步任务里完成，中途不发生渲染。手机端若度量仍有偏差，由后续像素裁切兜底。
+  const sheet = document.styleSheets && document.styleSheets[0];
+  let H;
+  if (sheet && sheet.insertRule) {
+    const start = sheet.cssRules.length;
+    for (const r of cssRules) sheet.insertRule(r, sheet.cssRules.length);
+    document.body.appendChild(holder);
+    H = Math.max(120, Math.min(Math.ceil(el.getBoundingClientRect().height), 20000));
+    document.body.removeChild(holder);
+    for (let i = sheet.cssRules.length - 1; i >= start; i--) sheet.deleteRule(i);
+  } else {
+    document.body.appendChild(holder);
+    H = Math.max(120, Math.min(el.scrollHeight + PAD * 2, 20000));
+    document.body.removeChild(holder);
+  }
+  const xhtml = new XMLSerializer().serializeToString(el);
+  const scale = W * H <= 1440 * 4000 ? 2 : 1; // 2x 超采样（清晰度）；过大回落 1x 防老设备画布超限
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '">' +
+    '<foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">' +
+    '<style>' + css + '</style>' + xhtml +
+    '</div></foreignObject></svg>';
+  const url = await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const cv = document.createElement('canvas');
+        cv.width = W * scale; cv.height = H * scale;
+        const ctx = cv.getContext('2d');
+        ctx.scale(scale, scale);
+        ctx.fillStyle = '#fffdf8';
+        ctx.fillRect(0, 0, W, H);
+        ctx.drawImage(img, 0, 0);
+        resolve(trimCanvasBottom(cv, Math.round(PAD * scale)));
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error('render'));
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
   });
+  return url.split(',')[1] || '';
 }
 /* 裁掉画布底部空白，返回 PNG dataURL 的 base64：
  * 手机 WebView 的页面文字缩放/字体放大会让 DOM 测量比 SVG 栅格化偏高（SVG 图片不受页面缩放），
@@ -3011,13 +3041,16 @@ function insertAtCursor(text) {
 }
 /* 预览中点击图片 → 浮动调整面板（缩放 / 对齐），调整直接回写 Markdown */
 let imgPanel = null;
-function closeImgPanel() { if (imgPanel) { imgPanel.remove(); imgPanel = null; } }
+function closeImgPanel() {
+  if (imgPanel) { imgPanel.remove(); imgPanel = null; }
+  document.querySelectorAll('img.img-selected').forEach(x => x.classList.remove('img-selected'));
+}
 function stepWidth(w, dir) {
   if (!w) return dir > 0 ? '300' : '180';
   if (w.endsWith('%')) return clamp(parseFloat(w) + dir * 10, 10, 100) + '%';
   return String(clamp(parseInt(w, 10) + dir * 60, 60, 2000));
 }
-function showImgPanel(img) {
+function showImgPanel(img, wys) {
   closeImgPanel();
   const p = document.createElement('div'); p.className = 'img-panel';
   const cur = { w: img.dataset.w || '', al: img.dataset.al || 'l' };
@@ -3032,7 +3065,9 @@ function showImgPanel(img) {
     img.style.display = (cur.al === 'c' || cur.al === 'r') ? 'block' : '';
     img.style.margin = cur.al === 'c' ? '0 auto' : (cur.al === 'r' ? '0 0 0 auto' : '');
     updateImageSpecInSource(img, cur);
+    if (wys) elWys.dispatchEvent(new Event('input', { bubbles: true })); // wys：dataset 变化需重序列化
   };
+  if (wys) img.classList.add('img-selected'); // 手机端点选态：高亮边框
   p.append(
     mk('－', () => { cur.w = stepWidth(cur.w, -1); apply(); }, '缩小'),
     mk('＋', () => { cur.w = stepWidth(cur.w, 1); apply(); }, '放大'),
@@ -3076,11 +3111,22 @@ function showImgPanel(img) {
       } catch (e) { toast('复制失败：' + (e.message || e)); }
     }, '复制图片到剪贴板（可粘贴到聊天或文档）'),
   );
+  if (wys) {
+    const bd = mk('删除', () => {
+      img.remove();
+      elWys.dispatchEvent(new Event('input', { bubbles: true }));
+      closeImgPanel();
+      toast('图片已删除');
+    }, '从便签中删除这张图片');
+    bd.style.color = '#c0392b';
+    p.appendChild(bd);
+  }
   document.body.appendChild(p);
   const r = img.getBoundingClientRect();
   p.style.left = clamp(Math.round(r.left), 8, Math.max(8, innerWidth - p.offsetWidth - 8)) + 'px';
   p.style.top = clamp(Math.round(r.bottom) + 6, 8, Math.max(8, innerHeight - p.offsetHeight - 8)) + 'px';
   imgPanel = p;
+  img.classList.add('img-selected');
   setTimeout(() => document.addEventListener('click', function away(e2) {
     if (!e2.target.closest('.img-panel') && e2.target !== img) { closeImgPanel(); document.removeEventListener('click', away, true); }
   }, true), 0);
@@ -3994,6 +4040,13 @@ function bindEvents() {
   elWys.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) wysEnterContinue(e);
     else if (e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey) wysBackspaceOutdent(e);
+  });
+  // 富文本内点选图片（含手机触摸）：弹出操作面板（删除/缩放/对齐），并进入选中高亮态
+  elWys.addEventListener('click', e => {
+    const img = e.target.closest ? e.target.closest('img') : null;
+    if (!img) { closeImgPanel(); return; }
+    e.preventDefault();
+    showImgPanel(img, true);
   });
   elWys.addEventListener('paste', e => {
     const files = [...((e.clipboardData || {}).items || [])].filter(i => i.kind === 'file' && /^image\//.test(i.type)).map(i => i.getAsFile()).filter(Boolean);

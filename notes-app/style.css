@@ -153,6 +153,10 @@ input { font: inherit; color: inherit; }
 .sync-state.busy { color: var(--tint); }
 .sb-btns { display: flex; align-items: center; }
 .icon-btn.spin .ic { animation: spin 0.9s linear infinite; }
+/* 1.9.2 富文本内图片点选态（手机端触摸点选后高亮，配合操作面板） */
+.md-body img.img-selected { outline: 2px solid #d9a826; outline-offset: 2px; }
+/* 1.9.2 富文本内图片点选态（手机端触摸点选后高亮，配合操作面板） */
+.md-body img.img-selected { outline: 2px solid #d9a826; outline-offset: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* 拖拽分隔条（桌面端） */
